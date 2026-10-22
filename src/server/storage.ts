@@ -27,7 +27,12 @@ export type StoredFile = { path: string; absolute: string; name: string; size: n
 /** A file found inside a shared folder: `relative` to that folder, `path` from the storage root. */
 export type FolderFile = { relative: string; path: string; size: number; modifiedAt: number };
 
-export const MAX_FOLDER_FILES = 10_000;
+/** Files and folders a shared folder may hold, and files a whole link may share. */
+export const MAX_FOLDER_ENTRIES = 20_000;
+export const MAX_LINK_FILES = 10_000;
+// Backslashes, control and bidi characters: names that read differently in a tree or an extractor.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const UNSAFE_NAME = /[\\\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 const WALK_CACHE_MS = 3_000;
 
 /** Read-only view of the shared folder. Every path is relative to the root and checked against escapes and the deny list. */
@@ -36,7 +41,7 @@ export class Storage {
   private readonly deny: string[];
   private readonly hideSystem: boolean;
   private readonly walkCacheMs: number;
-  private readonly walks = new Map<string, { at: number; files: FolderFile[] }>();
+  private readonly walks = new Map<string, { at: number; files: FolderFile[] } | { at: number; error: unknown }>();
 
   constructor(root: string, deny: string[] = [], hideSystem = true, walkCacheMs = WALK_CACHE_MS) {
     this.realRoot = fs.realpathSync(root);
@@ -113,6 +118,16 @@ export class Storage {
     return this.resolve(relative).absolute;
   }
 
+  /** Whether a path still resolves inside the root, without reading anything below it. */
+  exists(relative: string): boolean {
+    try {
+      this.resolve(relative);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   kindOf(relative: string): 'file' | 'folder' {
     const { relative: clean, absolute } = this.resolve(relative);
     const stat = fs.statSync(absolute);
@@ -122,15 +137,31 @@ export class Storage {
   }
 
   /**
-   * Every file below a folder, skipping hidden and denied paths and never following symlinks.
-   * Folders it may not read are left out. Cached for a few seconds: the admin polls and the broker asks often.
+   * Every file below a folder, skipping hidden and denied paths, names that could mislead an extractor and
+   * symlinks. Folders it may not read are left out. Results, failures included, are cached for a few seconds.
    */
   walk(relative: string): FolderFile[] {
     const { relative: base, absolute } = this.resolve(relative);
+    const now = Date.now();
+    for (const [key, entry] of this.walks) if (now - entry.at >= this.walkCacheMs) this.walks.delete(key);
     const cached = this.walks.get(base);
-    if (cached && Date.now() - cached.at < this.walkCacheMs) return cached.files;
+    if (cached) {
+      if ('error' in cached) throw cached.error;
+      return cached.files;
+    }
+    try {
+      const files = this.walkUncached(base, absolute);
+      if (this.walkCacheMs > 0) this.walks.set(base, { at: now, files });
+      return files;
+    } catch (error) {
+      if (this.walkCacheMs > 0) this.walks.set(base, { at: now, error });
+      throw error;
+    }
+  }
 
+  private walkUncached(base: string, absolute: string): FolderFile[] {
     const files: FolderFile[] = [];
+    let seen = 0;
     const pending = [''];
     while (pending.length) {
       const inner = pending.pop() as string;
@@ -142,6 +173,9 @@ export class Storage {
         continue;
       }
       for (const dirent of dirents) {
+        // Directories count too: a tree of empty folders must not be free to walk.
+        if (++seen > MAX_FOLDER_ENTRIES) throw new StorageError('too_many');
+        if (UNSAFE_NAME.test(dirent.name)) continue;
         const innerPath = inner ? `${inner}/${dirent.name}` : dirent.name;
         const fullPath = base ? `${base}/${innerPath}` : innerPath;
         if (this.isHidden(fullPath)) continue;
@@ -154,12 +188,10 @@ export class Storage {
           } catch {
             // vanished or unreadable while walking
           }
-          if (files.length > MAX_FOLDER_FILES) throw new StorageError('too_many');
         }
       }
     }
     files.sort((a, b) => a.relative.localeCompare(b.relative));
-    if (this.walkCacheMs > 0) this.walks.set(base, { at: Date.now(), files });
     return files;
   }
 

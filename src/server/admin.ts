@@ -99,6 +99,8 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
   app.addHook('onRequest', async (request, reply) => {
     if (!isAllowed(allowed, request.ip)) return reply.code(403).send({ error: 'forbidden_network' });
     const host = (request.headers.host ?? '').replace(/:\d+$/, '').toLowerCase();
+    // The container's own health probe comes from inside, by address: it answers nothing about links.
+    if (request.routeOptions.url === '/healthz') return;
     if (config.adminHosts.length && !config.adminHosts.includes(host))
       return reply.code(421).send({ error: 'wrong_host' });
 

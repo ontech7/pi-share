@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { ChangePolicy, ChangeView, FileState, ItemChanges, ItemKind } from '../shared/api.ts';
 import { sha256 } from './crypto.ts';
 import type { SensitiveList } from './sensitive.ts';
@@ -25,11 +26,17 @@ export type Inspection = {
   entries: Entry[];
   changes: ChangeView[];
   changed: boolean;
+  /** Changes whenever what is on disk changes: accepting changes must name the version the owner looked at. */
+  version: string;
 };
 
 export type ContentDeps = { storage: Storage; sensitive: SensitiveList };
 
 export const entryId = (position: number, relative: string) => sha256(`${position}:${relative}`).slice(0, 16);
+
+/** Characters Windows and some extractors read as drive letters or wildcards. */
+const safeSegment = (segment: string) => segment.replace(/[:*?"<>|]/g, '_');
+const safePath = (relative: string) => relative.split('/').map(safeSegment).join('/');
 
 /**
  * Compares what a link shares with what is on disk now. Files that turn out to be sensitive and were not
@@ -41,16 +48,20 @@ export function inspect(
   policy: ChangePolicy,
   { storage, sensitive }: ContentDeps,
 ): Inspection {
-  const names = archiveNames(items.map((item) => item.name));
+  const names = archiveNames(items.map((item) => safeSegment(item.name)));
   const reports: ItemReport[] = [];
   const entries: Entry[] = [];
   const changes: ChangeView[] = [];
-  const isSensitive = (file: { path: string; size: number; modifiedAt: number }) => {
+  const version = crypto.createHash('sha256');
+  // A file that no longer resolves inside the root (a folder swapped for a link) is never served.
+  const excluded = (file: { path: string; size: number; modifiedAt: number }) => {
+    let absolute: string;
     try {
-      return sensitive.matches({ ...file, absolute: storage.absolute(file.path) });
+      absolute = storage.absolute(file.path);
     } catch {
       return true;
     }
+    return sensitive.matches(file, absolute);
   };
 
   items.forEach((item, index) => {
@@ -59,8 +70,9 @@ export function inspect(
       const current = currentFile(storage, item.path);
       const same = current !== null && current.size === item.size && current.modifiedAt === item.modifiedAt;
       const state: FileState = current === null ? 'missing' : same ? 'ok' : 'changed';
+      version.update(`${item.position}\0${current ? `${current.size}:${current.modifiedAt}` : '-'}\n`);
       if (state !== 'ok') changes.push({ path: name, change: state === 'missing' ? 'removed' : 'changed' });
-      const served = same ? item : current && policy === 'follow' && !isSensitive(current) ? current : null;
+      const served = same ? item : current && policy === 'follow' && !excluded(current) ? current : null;
       if (served) {
         entries.push({
           id: entryId(item.position, ''),
@@ -79,12 +91,15 @@ export function inspect(
     const snapshotSize = before.reduce((sum, snapshot) => sum + snapshot.size, 0);
     const files = currentFolder(storage, item.path);
     if (files === null) {
+      version.update(`${item.position}\0-\n`);
       changes.push({ path: name, change: 'removed' });
       reports.push({ item, name, state: 'missing', changes: null, size: snapshotSize, fileCount: before.length });
       return;
     }
 
     const known = new Map(before.map((snapshot) => [snapshot.relative, snapshot]));
+    const shown = archiveNames(files.map((file) => safePath(file.relative)));
+    const display = new Map(files.map((file, i) => [file.relative, `${name}/${shown[i]}`]));
     const counts: ItemChanges = { added: 0, removed: 0, changed: 0 };
     const served: Entry[] = [];
     const seen = new Set<string>();
@@ -92,8 +107,9 @@ export function inspect(
       seen.add(file.relative);
       const old = known.get(file.relative);
       const same = old !== undefined && old.size === file.size && old.modifiedAt === file.modifiedAt;
-      if (!same && isSensitive(file)) continue;
-      const path = `${name}/${file.relative}`;
+      if (!same && excluded(file)) continue;
+      version.update(`${item.position}\0${file.relative}\0${file.size}:${file.modifiedAt}\n`);
+      const path = display.get(file.relative) as string;
       if (!old) {
         counts.added++;
         changes.push({ path, change: 'added' });
@@ -115,7 +131,7 @@ export function inspect(
     for (const snapshot of before) {
       if (seen.has(snapshot.relative)) continue;
       counts.removed++;
-      changes.push({ path: `${name}/${snapshot.relative}`, change: 'removed' });
+      changes.push({ path: `${name}/${safePath(snapshot.relative)}`, change: 'removed' });
     }
 
     const dirty = counts.added + counts.removed + counts.changed > 0;
@@ -130,7 +146,13 @@ export function inspect(
     });
   });
 
-  return { items: reports, entries, changes, changed: changes.length > 0 };
+  return {
+    items: reports,
+    entries,
+    changes,
+    changed: changes.length > 0,
+    version: version.digest('hex').slice(0, 16),
+  };
 }
 
 /** The files of a folder as they are now, without the sensitive ones unless the owner confirmed them. */
@@ -142,7 +164,13 @@ export function folderSnapshot(
   const files: FolderFile[] = [];
   const flagged: string[] = [];
   for (const file of storage.walk(folder)) {
-    if (sensitive.matches({ ...file, absolute: storage.absolute(file.path) })) {
+    let absolute: string;
+    try {
+      absolute = storage.absolute(file.path);
+    } catch {
+      continue;
+    }
+    if (sensitive.matches(file, absolute)) {
       flagged.push(file.path);
       if (!includeSensitive) continue;
     }

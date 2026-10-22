@@ -59,6 +59,12 @@ const receive = async (link: LinkDetail) => {
 
 const write = (files: Record<string, string>) => writeFiles(stack.storageRoot, files);
 
+/** Accepts the changes the admin would be looking at right now. */
+const accept = async (link: LinkDetail, extra: Record<string, unknown> = {}) => {
+  const { version } = await detail(link);
+  return (await stack.adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: version, ...extra })).body;
+};
+
 describe('sharing a folder', () => {
   let link: LinkDetail;
 
@@ -97,14 +103,19 @@ describe('sharing a folder', () => {
   });
 
   it('pauses when a file is added, and resumes with it once accepted', async () => {
+    const holder = await stack.visit(link.id, '203.0.113.200');
+    const { ticket } = (await stack.open(holder, link)).json() as { ticket: string };
     write({ 'Photos/2023/new.jpg': 'new!' });
     let current = await detail(link);
     expect(current.state).toBe('paused');
     expect(current.items[0]?.changes).toEqual({ added: 1, removed: 0, changed: 0 });
     expect(current.changes).toEqual([{ path: 'Photos/2023/new.jpg', change: 'added' }]);
     expect(await receive(link)).toMatchObject({ status: 404, body: { reason: 'paused' } });
+    const files = await stack.call(holder, 'GET', `/api/links/${link.id}/files/all`, undefined, ticket);
+    expect(files.statusCode).toBe(404);
+    expect(files.json()).toMatchObject({ reason: 'paused' });
 
-    current = (await stack.adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: true })).body;
+    current = await accept(link);
     expect(current.state).toBe('active');
     expect(current.items[0]).toMatchObject({ fileCount: 3, size: 14, changes: { added: 0, removed: 0, changed: 0 } });
     expect((await receive(link)).meta?.entries.map((entry) => entry.path)).toContain('Photos/2023/new.jpg');
@@ -123,7 +134,7 @@ describe('sharing a folder', () => {
     let current = await detail(link);
     expect(current.state).toBe('unavailable');
     expect(current.items[0]?.state).toBe('missing');
-    current = (await stack.adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: true })).body;
+    current = await accept(link);
     expect(current.items).toEqual([]);
     fs.renameSync(path.join(stack.storageRoot, 'Moved'), path.join(stack.storageRoot, 'Photos'));
   });
@@ -177,7 +188,7 @@ describe('sensitive files inside a folder', () => {
   it('leaves them out when changes are accepted', async () => {
     const link = await create({ paths: ['Mixed'], confirmSensitive: true });
     write({ 'Mixed/extra.txt': 'extra' });
-    const current = (await stack.adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: true })).body;
+    const current = await accept(link);
     expect(current.items[0]?.fileCount).toBe(2);
     expect((await receive(current)).meta?.entries.map((entry) => entry.path)).toEqual([
       'Mixed/extra.txt',
@@ -186,7 +197,43 @@ describe('sensitive files inside a folder', () => {
   });
 });
 
+describe('accepting changes', () => {
+  it('refuses a version older than what is on disk now', async () => {
+    write({ 'Race/a.txt': 'a' });
+    const link = await create({ paths: ['Race'] });
+    write({ 'Race/photo.jpg': 'photo' });
+    const seen = await detail(link);
+    expect(seen.changes).toEqual([{ path: 'Race/photo.jpg', change: 'added' }]);
+    write({ 'Race/passport.pdf': 'dropped in meanwhile' });
+    const late = await stack.adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: seen.version });
+    expect(late).toMatchObject({ status: 409, body: { error: 'changes_moved' } });
+    expect((await detail(link)).state).toBe('paused');
+  });
+
+  it('asks before accepting a file that now holds sensitive content', async () => {
+    write({ 'Swap/report.txt': 'quarterly report' });
+    const link = await create({ paths: ['Swap/report.txt'] });
+    write({ 'Swap/report.txt': secret });
+    const refused = await stack.adminCall('PATCH', `/api/links/${link.id}`, {
+      acceptChanges: (await detail(link)).version,
+    });
+    expect(refused).toMatchObject({ status: 409, body: { error: 'sensitive', files: ['Swap/report.txt'] } });
+    expect((await accept(link, { confirmSensitive: true })).state).toBe('active');
+  });
+
+  it('rejects a malformed version', async () => {
+    const link = await create({ paths: ['Photos/a.jpg'] });
+    expect((await stack.adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: true })).status).toBe(400);
+  });
+});
+
 describe('items and names', () => {
+  it('skips names that would read differently in a tree or an extractor, and tames the rest', async () => {
+    write({ 'Odd/plain.txt': 'p', 'Odd/back\\slash.txt': 'b', 'Odd/evil\u202etxt.exe': 'e', 'Odd/what?.txt': 'w' });
+    const link = await create({ paths: ['Odd'], onChange: 'follow' });
+    expect((await receive(link)).meta?.entries.map((entry) => entry.path)).toEqual(['Odd/plain.txt', 'Odd/what_.txt']);
+  });
+
   it('rejects the storage root, denied and missing folders', async () => {
     for (const paths of [[''], ['/'], ['Photos/private'], ['Nope']]) {
       expect((await stack.adminCall('POST', '/api/links', { paths })).status, paths[0]).toBe(400);

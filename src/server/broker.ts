@@ -41,7 +41,7 @@ export type BrokerDeps = {
 
 export function isOnline(shares: Shares, settings: Settings): boolean {
   const service = settings.service();
-  return service.enabled && (!service.autoOff || shares.activeCount() > 0);
+  return service.enabled && (!service.autoOff || shares.openCount() > 0);
 }
 
 /** Every field cut to size instead of rejected, so an oversized header cannot wipe the visitor from the log. */
@@ -134,13 +134,13 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     return ticket.g === shares.passwordGeneration(link);
   };
 
-  // The switch applies at once; only the count of active links (it stats every shared file) is cached.
+  // The switch applies at once; the count of open links never looks at the disk, so any visitor may ask.
   app.get('/state', async () => {
     const service = settings.service();
     if (!service.enabled) return { online: false };
     if (!service.autoOff) return { online: true };
     if (Date.now() - activeLinks.at > ONLINE_CACHE || activeLinks.revision !== shares.revision) {
-      activeLinks = { value: shares.activeCount(), at: Date.now(), revision: shares.revision };
+      activeLinks = { value: shares.openCount(), at: Date.now(), revision: shares.revision };
     }
     return { online: activeLinks.value > 0 };
   });
@@ -209,7 +209,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const found = shares.servable(id);
       if (!found.ok) {
         shares.record(id, { ...visit, type: 'refused', detail: found.reason });
-        return unavailable(reply);
+        // The ticket already proves the key: tell why, so retries are not counted as guesses.
+        return unavailable(reply, found.reason);
       }
       const { entries } = found.value.content;
       const selected = part === 'all' ? entries : entries.filter((entry) => entry.id === part);
@@ -217,7 +218,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const target = { file: single?.position ?? null, path: single?.path ?? null };
       if (selected.length === 0) {
         shares.record(id, { ...visit, ...target, type: 'refused', detail: 'file_unavailable' });
-        return unavailable(reply);
+        return unavailable(reply, 'unavailable');
       }
 
       const total = [...perLink.values()].reduce((sum, n) => sum + n, 0);
@@ -251,7 +252,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       } catch (error) {
         if (!(error instanceof StorageError)) throw error;
         shares.record(id, { ...visit, ...target, type: 'refused', detail: `file_${error.code}` });
-        return unavailable(reply);
+        return unavailable(reply, 'unavailable');
       }
 
       const downloadId = randomId(9);

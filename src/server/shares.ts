@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
 import type {
   ChangePolicy,
   CreateLinkBody,
@@ -16,7 +16,7 @@ import { type ContentDeps, folderSnapshot, type Inspection, type Item, inspect, 
 import { hashSecret, keyProof, passwordVerifier, randomId, safeEqual, sha256, type Vault } from './crypto.ts';
 import { type Db, schema } from './db/index.ts';
 import type { SensitiveList } from './sensitive.ts';
-import { type FolderFile, type Storage, StorageError } from './storage.ts';
+import { type FolderFile, MAX_LINK_FILES, type Storage, StorageError } from './storage.ts';
 
 const { links, linkFiles, folderSnapshots, events } = schema;
 
@@ -134,7 +134,7 @@ export class Shares {
           const file = this.storage.file(relative);
           if (seen.has(file.path)) continue;
           seen.add(file.path);
-          if (this.sensitive.matches(file)) flagged.push(file.path);
+          if (this.sensitive.matches(file, file.absolute)) flagged.push(file.path);
           items.push({
             kind: 'file',
             path: file.path,
@@ -166,6 +166,8 @@ export class Shares {
     // Something picked inside a folder that is shared as a whole would appear twice.
     const folders = items.filter((item) => item.kind === 'folder').map((item) => `${item.path}/`);
     const outer = items.filter((item) => !folders.some((folder) => item.path.startsWith(folder)));
+    const total = outer.reduce((sum, item) => sum + (item.files?.length ?? 1), 0);
+    if (total > MAX_LINK_FILES) throw new ShareError(400, 'file_too_many', { path: paths[0] });
     return { items: outer, flagged: [...new Set(flagged)] };
   }
 
@@ -209,6 +211,7 @@ export class Shares {
       ...summary,
       url: this.url(row),
       changes: content.changes.slice(0, MAX_CHANGES),
+      version: content.version,
       events: history.map(({ linkId: _, ...event }) => event as EventView),
     };
   }
@@ -216,6 +219,9 @@ export class Shares {
   async update(id: string, input: UpdateLinkBody): Promise<LinkDetail> {
     const patch = updateLinkBody.parse(input);
     const row = this.row(id);
+    const accept = patch.acceptChanges
+      ? this.prepareAccept(row, patch.acceptChanges, patch.confirmSensitive ?? false)
+      : null;
     const changes: Partial<LinkRow> = {};
     if (patch.label !== undefined) changes.label = patch.label;
     if (patch.expiresAt !== undefined) changes.expiresAt = patch.expiresAt;
@@ -232,35 +238,55 @@ export class Shares {
 
     this.db.transaction((tx) => {
       if (Object.keys(changes).length) tx.update(links).set(changes).where(eq(links.id, id)).run();
-      if (patch.acceptChanges) this.acceptChanges(tx, row);
+      accept?.(tx);
     });
     this.revision++;
     return this.detail(id);
   }
 
-  /** What is on disk now becomes what the link shares; items that are gone leave the link. */
-  private acceptChanges(tx: Tx, link: LinkRow) {
+  /**
+   * What is on disk now becomes what the link shares; items that are gone leave the link. Only the version the
+   * owner looked at is accepted: anything that appeared since, or a file now on the sensitive list, is refused.
+   */
+  private prepareAccept(link: LinkRow, version: string, confirmSensitive: boolean): (tx: Tx) => void {
     const content = this.inspect(link);
-    for (const { item, state } of content.items) {
-      const where = and(eq(linkFiles.linkId, link.id), eq(linkFiles.position, item.position));
-      if (state === 'ok') continue;
-      if (state === 'missing') {
-        tx.delete(linkFiles).where(where).run();
-        tx.delete(folderSnapshots)
-          .where(and(eq(folderSnapshots.linkId, link.id), eq(folderSnapshots.position, item.position)))
-          .run();
-      } else if (item.kind === 'file') {
-        const current = this.storage.file(item.path);
-        tx.update(linkFiles).set({ size: current.size, modifiedAt: current.modifiedAt }).where(where).run();
-      } else {
-        const { files } = folderSnapshot(this.content, item.path, false);
-        this.writeSnapshot(tx, link.id, item.position, files);
-        tx.update(linkFiles)
-          .set({ size: files.reduce((sum, file) => sum + file.size, 0) })
-          .where(where)
-          .run();
+    if (content.version !== version) throw new ShareError(409, 'changes_moved');
+    const writes: ((tx: Tx) => void)[] = [];
+    const flagged: string[] = [];
+    try {
+      for (const { item, state } of content.items) {
+        const where = and(eq(linkFiles.linkId, link.id), eq(linkFiles.position, item.position));
+        if (state === 'ok') continue;
+        if (state === 'missing') {
+          writes.push((tx) => {
+            tx.delete(linkFiles).where(where).run();
+            tx.delete(folderSnapshots)
+              .where(and(eq(folderSnapshots.linkId, link.id), eq(folderSnapshots.position, item.position)))
+              .run();
+          });
+        } else if (item.kind === 'file') {
+          const current = this.storage.file(item.path);
+          if (this.sensitive.matches(current, current.absolute)) flagged.push(current.path);
+          writes.push((tx) =>
+            tx.update(linkFiles).set({ size: current.size, modifiedAt: current.modifiedAt }).where(where).run(),
+          );
+        } else {
+          const { files } = folderSnapshot(this.content, item.path, false);
+          const size = files.reduce((sum, file) => sum + file.size, 0);
+          writes.push((tx) => {
+            this.writeSnapshot(tx, link.id, item.position, files);
+            tx.update(linkFiles).set({ size }).where(where).run();
+          });
+        }
       }
+    } catch (error) {
+      if (error instanceof StorageError) throw new ShareError(409, 'changes_moved');
+      throw error;
     }
+    if (flagged.length && !confirmSensitive) throw new ShareError(409, 'sensitive', { files: flagged });
+    return (tx) => {
+      for (const write of writes) write(tx);
+    };
   }
 
   remove(id: string) {
@@ -271,6 +297,25 @@ export class Shares {
 
   activeCount(): number {
     return this.list().filter((link) => link.state === 'active').length;
+  }
+
+  /**
+   * Links that their own settings still allow and that still point at something on disk, without walking
+   * folders or comparing files: cheap enough to answer for every public request, which is all the switch needs.
+   */
+  openCount(): number {
+    const now = Date.now();
+    const rows = this.db
+      .select({ id: links.id, maxDownloads: links.maxDownloads })
+      .from(links)
+      .where(and(eq(links.active, true), isNull(links.lockedAt), or(isNull(links.expiresAt), gt(links.expiresAt, now))))
+      .all();
+    const counts = rows.some((row) => row.maxDownloads) ? this.counts() : new Map();
+    return rows.filter((row) => {
+      if (row.maxDownloads && (counts.get(row.id)?.started ?? 0) >= row.maxDownloads) return false;
+      const items = this.db.select({ path: linkFiles.path }).from(linkFiles).where(eq(linkFiles.linkId, row.id)).all();
+      return items.some((item) => this.storage.exists(item.path));
+    }).length;
   }
 
   find(id: string): LinkRow | undefined {

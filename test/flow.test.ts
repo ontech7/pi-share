@@ -293,7 +293,7 @@ describe('sharing flow', () => {
       404,
     );
 
-    await adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: true });
+    await adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: detail.version });
     detail = (await adminCall('GET', `/api/links/${link.id}`)).body;
     expect(detail.state).toBe('active');
     expect(detail.items.map((item) => item.state)).toEqual(['ok', 'ok']);

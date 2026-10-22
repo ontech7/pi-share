@@ -130,6 +130,8 @@ const en = {
   'detail.preview': 'Link preview',
   'detail.changes': 'Changes on the disk',
   'detail.moreChanges': 'and {n} more',
+  'detail.changesMoved': 'The disk changed again meanwhile: check the new list and accept again.',
+  'detail.acceptSensitive': 'These files are on the sensitive list. Share them anyway?\n\n{files}',
 
   'event.preview': 'Link preview by a chat app',
   'event.open': 'Page opened',
@@ -327,6 +329,8 @@ const it: Record<MessageKey, string> = {
   'detail.preview': 'Anteprima del link',
   'detail.changes': 'Modifiche sul disco',
   'detail.moreChanges': 'e altre {n}',
+  'detail.changesMoved': 'Nel frattempo il disco è cambiato ancora: controlla la nuova lista e accetta di nuovo.',
+  'detail.acceptSensitive': 'Questi file sono nella lista dei sensibili. Condividerli comunque?\n\n{files}',
 
   'event.preview': "Anteprima del link da un'app di chat",
   'event.open': 'Pagina aperta',

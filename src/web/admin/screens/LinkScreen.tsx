@@ -11,7 +11,7 @@ import { CopyButton } from '../../ui/CopyButton.tsx';
 import { Spinner } from '../../ui/Spinner.tsx';
 import { Switch } from '../../ui/Switch.tsx';
 import { useToast } from '../../ui/Toaster.tsx';
-import { api, keys } from '../api.ts';
+import { ApiError, api, keys } from '../api.ts';
 import { ActivityList } from '../detail/ActivityList.tsx';
 import { EditLinkDialog } from '../detail/EditLinkDialog.tsx';
 import { FileStateBadge, LinkStateBadge } from '../status.tsx';
@@ -32,6 +32,27 @@ export function LinkScreen({ id }: { id: string }) {
       queryClient.invalidateQueries({ queryKey: keys.service });
     },
     onError: () => notify(t('common.error'), 'error'),
+  });
+  const accept = useMutation({
+    mutationFn: ({ version, confirmSensitive }: { version: string; confirmSensitive?: boolean }) =>
+      api.updateLink(id, { acceptChanges: version, confirmSensitive }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(keys.link(id), updated);
+      queryClient.invalidateQueries({ queryKey: keys.links });
+      queryClient.invalidateQueries({ queryKey: keys.service });
+    },
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.code === 'sensitive') {
+        const files = (error.data.files as string[]).join('\n');
+        if (window.confirm(t('detail.acceptSensitive', { files }))) {
+          accept.mutate({ ...variables, confirmSensitive: true });
+        }
+        return;
+      }
+      if (error instanceof ApiError && error.code === 'changes_moved') notify(t('detail.changesMoved'), 'error');
+      else notify(t('common.error'), 'error');
+      queryClient.invalidateQueries({ queryKey: keys.link(id) });
+    },
   });
   const remove = useMutation({
     mutationFn: () => api.deleteLink(id),
@@ -153,8 +174,8 @@ export function LinkScreen({ id }: { id: string }) {
               </p>
               <Button
                 icon={<RefreshCw className="size-4" />}
-                onClick={() => update.mutate({ acceptChanges: true })}
-                loading={update.isPending}
+                onClick={() => accept.mutate({ version: data.version })}
+                loading={accept.isPending}
               >
                 {t('actions.acceptChanges')}
               </Button>

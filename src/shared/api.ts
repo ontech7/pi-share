@@ -41,7 +41,12 @@ export const updateLinkBody = z.object({
   maxDownloads: z.number().int().min(1).max(10_000).nullable().optional(),
   password: z.string().min(4).max(256).nullable().optional(),
   onChange: z.enum(changePolicies).optional(),
-  acceptChanges: z.literal(true).optional(),
+  /** The `version` of the changes the owner looked at: anything newer is refused, not accepted blindly. */
+  acceptChanges: z
+    .string()
+    .regex(/^[a-f0-9]{16}$/)
+    .optional(),
+  confirmSensitive: z.boolean().optional(),
 });
 export type UpdateLinkBody = z.input<typeof updateLinkBody>;
 
@@ -130,7 +135,7 @@ export type EventView = {
   detail: string | null;
 };
 
-export type LinkDetail = LinkSummary & { url: string; changes: ChangeView[]; events: EventView[] };
+export type LinkDetail = LinkSummary & { url: string; changes: ChangeView[]; version: string; events: EventView[] };
 
 export type SensitiveConflict = { error: 'sensitive'; files: string[] };
 

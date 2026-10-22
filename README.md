@@ -110,7 +110,7 @@ docker compose logs admin | grep "setup code"
 3. `/run` is cleared at boot: add `d /run/pi-share/broker 0750 10001 10001 -` and the same line for `edge` to
    `/etc/tmpfiles.d/pi-share.conf`.
 
-To update, change `PI_SHARE_IMAGE` in `.env` (or keep `:0.3` for every 0.3.x) and run
+To update, change `PI_SHARE_IMAGE` in `.env` (or keep `:0.4` for every 0.4.x) and run
 `docker compose pull && docker compose up -d`. Each image carries a signed build provenance:
 `gh attestation verify oci://ghcr.io/ontech7/pi-share:0.4.0 --repo ontech7/pi-share` proves it was built by this
 repository's workflow from the tagged commit. To build it yourself instead, `docker build -t pi-share:local .` in a

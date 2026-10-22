@@ -174,7 +174,8 @@ def running_version(config, env_text):
             return match["tag"]
         # A moving x.y tag: the version is the one the image itself carries.
         version = image_labels(config, match["reference"]).get("org.opencontainers.image.version")
-        if isinstance(version, str) and VERSION.fullmatch(version) and version.startswith(match["tag"] + "."):
+        version = version.removeprefix("v") if isinstance(version, str) else ""
+        if VERSION.fullmatch(version) and version.startswith(match["tag"] + "."):
             return version
         break
     raise Refused("the running version could not be read from the env file")
@@ -254,7 +255,8 @@ def verify_image(config, version):
     labels = image_labels(config, reference)
     if labels.get("org.opencontainers.image.source") != f"https://github.com/{config['REPO']}":
         raise Refused("the image does not come from the expected repository")
-    if labels.get("org.opencontainers.image.version") != version:
+    # 0.4.0 was published with the tag name (v0.4.0) as its version label.
+    if labels.get("org.opencontainers.image.version") not in (version, f"v{version}"):
         raise Refused("the image does not carry the expected version")
 
     digests = inspect(config, reference, "RepoDigests", [])

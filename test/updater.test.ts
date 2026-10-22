@@ -351,6 +351,18 @@ describe('the updater on the host', () => {
     expect(env()).toBe(`PI_SHARE_IMAGE=${IMAGE}:0.4.0@sha256:${DIGEST}\n`);
   });
 
+  it('accepts a version label written as the tag name', async () => {
+    setState({
+      labels: {
+        'org.opencontainers.image.source': 'https://github.com/ontech7/pi-share',
+        'org.opencontainers.image.version': 'v0.4.0',
+      },
+    });
+    request({ version: '0.4.0' });
+    await runUpdater();
+    expect(status().state).toBe('done');
+  });
+
   it('keeps the mode of the env file it rewrites', async () => {
     fs.chmodSync(path.join(dirs.etc, '.env'), 0o600);
     request({ version: '0.4.0' });

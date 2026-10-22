@@ -249,7 +249,7 @@ export class Shares {
 
   private startedDownload(linkId: string, downloadId: string) {
     return this.db
-      .select({ file: events.file })
+      .select({ file: events.file, visitor: events.visitor })
       .from(events)
       .where(and(eq(events.linkId, linkId), eq(events.downloadId, downloadId), eq(events.type, 'download_started')))
       .get();
@@ -275,8 +275,10 @@ export class Shares {
     return this.db.delete(events).where(lt(events.at, cutoff)).run().changes;
   }
 
-  hasDownload(linkId: string, downloadId: string): boolean {
-    return this.startedDownload(linkId, downloadId) !== undefined;
+  /** Whether this visitor started this download (only they may report how it ended). */
+  startedBy(linkId: string, downloadId: string, visitor: string | null | undefined): boolean {
+    const started = this.startedDownload(linkId, downloadId);
+    return started !== undefined && !!visitor && started.visitor === visitor;
   }
 
   downloadFile(linkId: string, downloadId: string): number | null {
@@ -286,14 +288,17 @@ export class Shares {
   /** Counts a wrong password; returns true when the link just got locked. */
   failPassword(link: LinkRow, visit: Visit): boolean {
     this.record(link.id, { ...visit, type: 'password_failed' });
-    const failures = link.failedPasswords + 1;
-    const lock = failures >= this.maxPasswordFailures;
-    this.db
+    // Incremented in SQL, not from the row read before the password check: parallel attempts must all count.
+    const updated = this.db
       .update(links)
-      .set({ failedPasswords: failures, ...(lock ? { lockedAt: Date.now() } : {}) })
+      .set({ failedPasswords: sql`${links.failedPasswords} + 1` })
       .where(eq(links.id, link.id))
-      .run();
+      .returning({ failures: links.failedPasswords, lockedAt: links.lockedAt })
+      .get();
+    const failures = updated?.failures ?? 0;
+    const lock = failures >= this.maxPasswordFailures && !updated?.lockedAt;
     if (lock) {
+      this.db.update(links).set({ lockedAt: Date.now() }).where(eq(links.id, link.id)).run();
       this.record(link.id, { ...visit, type: 'locked', detail: `${failures} wrong passwords` });
       this.revision++;
     }

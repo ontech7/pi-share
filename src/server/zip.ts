@@ -1,8 +1,27 @@
 import fs from 'node:fs';
-import { Readable } from 'node:stream';
+import { pipeline, Readable, Transform } from 'node:stream';
 import zlib from 'node:zlib';
 
 export type ZipEntry = { name: string; size: number; modifiedAt: number; open: () => number };
+
+/** A stream that owns the descriptor from the start (closed even if never read) and fails if the file shrank. */
+export function exactFile(fd: number, size: number, signal?: AbortSignal): Readable {
+  if (size === 0) {
+    fs.closeSync(fd);
+    return Readable.from([]);
+  }
+  let read = 0;
+  const guard = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      read += chunk.length;
+      done(null, chunk);
+    },
+    flush(done) {
+      done(read === size ? null : new Error('file shrank while being read'));
+    },
+  });
+  return pipeline(fs.createReadStream('', { fd, start: 0, end: size - 1, autoClose: true, signal }), guard, () => {});
+}
 
 /** Exactly `size` bytes from an already opened descriptor; fewer means the file changed underneath. */
 export async function* readExactly(fd: number, size: number, signal?: AbortSignal): AsyncGenerator<Buffer> {

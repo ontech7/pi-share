@@ -104,7 +104,10 @@ export class Storage {
       const opened = fs.fstatSync(fd);
       if (!opened.isFile()) throw new StorageError('not_a_file');
       const kernelPath = descriptorPath(fd);
-      if (kernelPath !== null && kernelPath !== absolute) throw new StorageError('denied');
+      if (kernelPath !== absolute && (kernelPath !== null || process.platform === 'linux')) {
+        throw new StorageError('denied');
+      }
+      this.assertNoSymlinks(stored.path);
       const checked = fs.statSync(absolute);
       if (checked.ino !== opened.ino || checked.dev !== opened.dev) throw new StorageError('denied');
       if (opened.size !== stored.size || Math.trunc(opened.mtimeMs) !== stored.modifiedAt)
@@ -113,6 +116,15 @@ export class Storage {
     } catch (error) {
       fs.closeSync(fd);
       throw error;
+    }
+  }
+
+  /** Where the kernel cannot name the descriptor's path, check every level of the path is a real directory. */
+  private assertNoSymlinks(relative: string) {
+    let current = this.realRoot;
+    for (const segment of this.normalize(relative).split('/')) {
+      current = path.join(current, segment);
+      if (fs.lstatSync(current).isSymbolicLink()) throw new StorageError('denied');
     }
   }
 

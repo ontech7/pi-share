@@ -236,6 +236,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
           </fieldset>
           <Field
             label={t('create.maxDownloads')}
+            hint={t('create.maxDownloadsHint')}
             type="number"
             inputMode="numeric"
             min={1}

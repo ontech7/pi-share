@@ -1,4 +1,4 @@
-import { pipeline, Readable } from 'node:stream';
+import { pipeline, type Readable } from 'node:stream';
 import Fastify, { type FastifyReply } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -8,7 +8,7 @@ import { encryptedSize, encryptStream, randomId, safeEqual, sealMeta, type Vault
 import type { Settings } from './settings.ts';
 import type { ServableLink, Shares, Visit } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
-import { archiveNames, readExactly, zipSize, zipStream } from './zip.ts';
+import { archiveNames, exactFile, zipSize, zipStream } from './zip.ts';
 
 /** The edge passes what it knows about the visitor in this header, as JSON. */
 export const VISIT_HEADER = 'x-visit';
@@ -67,6 +67,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   app.setSerializerCompiler(serializerCompiler);
 
   const perLink = new Map<string, number>();
+  const checkingPassword = new Set<string>();
   const perVisitor = new Map<string, number>();
   const lastPreview = new Map<string, number>();
   let activeLinks = { value: 0, at: 0, revision: -1 };
@@ -168,10 +169,20 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const { link } = allowed.servable;
       if (!link.passwordHash) return grant(allowed.servable, allowed.visitor);
       if (!request.body.verifier) return reply.code(403).send({ error: 'password_required' });
-      if (!(await verifySecret(link.passwordHash, request.body.verifier))) {
+      // One scrypt per link at a time: bursts cannot outrun the lockout nor fill the thread pool used by downloads.
+      if (checkingPassword.has(link.id)) return reply.code(429).send({ error: 'busy' });
+      checkingPassword.add(link.id);
+      let correct: boolean;
+      try {
+        correct = await verifySecret(link.passwordHash, request.body.verifier);
+      } finally {
+        checkingPassword.delete(link.id);
+      }
+      if (!correct) {
         const locked = shares.failPassword(link, visit);
         return reply.code(locked ? 404 : 403).send({ error: locked ? 'unavailable' : 'wrong_password' });
       }
+      if (shares.find(link.id)?.lockedAt) return unavailable(reply);
       shares.unlocked(link, visit);
       return grant(allowed.servable, allowed.visitor);
     },
@@ -227,7 +238,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         } else {
           const entry = selected[0] as (typeof selected)[number];
           plainSize = entry.size;
-          source = Readable.from(readExactly(storage.open(entry), entry.size, abort.signal));
+          source = exactFile(storage.open(entry), entry.size, abort.signal);
         }
       } catch (error) {
         if (!(error instanceof StorageError)) throw error;
@@ -297,7 +308,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const { id, downloadId } = request.params;
       const visit = visitOf(request.headers);
       if (!validTicket(id, visit, request.headers[TICKET_HEADER])) return reply.code(403).send({ error: 'ticket' });
-      if (!shares.hasDownload(id, downloadId) || shares.hasResult(id, downloadId)) {
+      if (!shares.startedBy(id, downloadId, visit.visitor) || shares.hasResult(id, downloadId)) {
         return reply.code(404).send({ error: 'unknown_download' });
       }
       shares.record(id, {

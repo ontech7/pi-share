@@ -177,3 +177,42 @@ describe('files swapped on disk', () => {
     }
   });
 });
+
+describe('parallel wrong passwords', () => {
+  it('still lock the link', async () => {
+    const link = await create({ files: ['Work/a.txt'], password: 'secret' });
+    const visitors = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => stack.visit(link.id, `198.51.100.${100 + i}`)),
+    );
+    for (let round = 0; round < 3; round++) {
+      await Promise.all(visitors.map((visitor) => stack.unlock(visitor, link, 'wrong')));
+    }
+    expect(((await stack.adminCall('GET', `/api/links/${link.id}`)).body as LinkDetail).state).toBe('locked');
+  });
+});
+
+describe('files swapped on disk, through a directory', () => {
+  it('refuses a file whose parent folder became a symbolic link', async () => {
+    fs.mkdirSync(path.join(stack.storageRoot, 'Swap'));
+    fs.writeFileSync(path.join(stack.storageRoot, 'Swap/e.txt'), 'eeee');
+    const link = await create({ files: ['Swap/e.txt'] });
+    const original = fs.statSync(path.join(stack.storageRoot, 'Swap/e.txt'));
+    const outside = path.join(stack.root, 'elsewhere');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'e.txt'), 'eeee');
+    fs.utimesSync(path.join(outside, 'e.txt'), original.atime, original.mtime);
+    fs.rmSync(path.join(stack.storageRoot, 'Swap'), { recursive: true });
+    fs.symlinkSync(outside, path.join(stack.storageRoot, 'Swap'));
+
+    const visitor = await stack.visit(link.id, '198.51.100.60');
+    const opened = await stack.open(visitor, link);
+    if (opened.statusCode === 200) {
+      const { ticket } = opened.json() as { ticket: string };
+      expect((await stack.call(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket)).statusCode).toBe(
+        404,
+      );
+    } else {
+      expect(opened.statusCode).toBe(404);
+    }
+  });
+});

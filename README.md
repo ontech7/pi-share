@@ -25,15 +25,18 @@ until the recipient downloads it, and the bytes travel encrypted end to end.
 
 ## What it does
 
-- **Link files in place.** Pick one or more files from your disk in the admin panel and get a link. Nothing is copied.
+- **Link files and folders in place.** Pick files or whole folders from your disk in the admin panel and get a link.
+  Nothing is copied. The recipient browses folders as a tree and downloads single files or everything as a zip.
 - **End-to-end encryption.** The key lives only in the link's `#fragment`, which browsers never send to a server.
   The recipient's browser decrypts and verifies every byte. Proxies, CDNs and tunnels see only ciphertext.
 - **Optional password, expiry and download limit** per link, with a lock after repeated wrong passwords.
 - **Know what happened.** Every open, wrong password, download start, completion, interruption and in-browser
   integrity check is logged with time, IP, country, browser, OS and language. Link previews from chat apps are
   logged separately.
-- **Stay in control.** Disable, re-enable or delete a link at any time. Each linked file is checked: if you move,
-  change or delete it, the link knows (changed files pause until you accept the new version).
+- **Stay in control.** Disable, re-enable or delete a link at any time. Every linked file and folder is compared
+  with what it held when the link was made. Per link you choose what a change does: **pause** the link until you
+  review and accept the list of added, removed and changed files, or **follow** the disk like a shared folder.
+  Defaults for new links (this policy, expiry, download limit, generated password) live in the settings.
 - **Gigabytes are fine.** Files stream from disk and are decrypted in a service worker straight to the
   recipient's download folder; "download all" builds a ZIP64 archive on the fly.
 - **Off when not in use.** One switch takes the public page offline, and it can go offline by itself when no link
@@ -99,6 +102,12 @@ Known limits, by design:
   the traffic anyway.
 - The download limit counts every started download, interrupted ones included; "download all" counts as one.
   Per-visitor limits rely on a cookie the visitor can drop; the per-link and global limits do not.
+- A file counts as unchanged while its size and modification time are the same. Someone who can write to the
+  disk and restore both after editing could serve new content without the link noticing; that person already
+  owns the files.
+- Folders are listed again at most every few seconds and up to 20,000 entries (10,000 files per link). Names
+  with backslashes, control or bidirectional characters are left out; `:*?"<>|` become `_` in what the
+  recipient sees, so an archive extracts the same on every system.
 
 ## How we know it works
 
@@ -110,7 +119,7 @@ Every push runs, and must pass, before anything is merged:
 | **Unit and integration tests** (Vitest) | wire format round trips at every record boundary, tampering and truncation, ZIP64 output checked with Python's `zipfile` and `unzip -t`, path traversal and symlinks, the full admin → edge → broker flow over real unix sockets |
 | **Security regression tests**           | one test per issue found in the independent review (see below)                                                                                                                                                                   |
 | **Coverage gate**                       | the build fails under 85% statements / 72% branches of `src/server` and `src/shared`                                                                                                                                             |
-| **End-to-end in a real browser**        | headless Chrome sets up the admin, creates a link, unlocks it, downloads through the service worker and compares the SHA-256 of the saved file with the original                                                                 |
+| **End-to-end in a real browser**        | headless Chrome sets up the admin, creates a link, unlocks it, downloads through the service worker and compares the SHA-256 of the saved file with the original, then shares a live folder and downloads it as a zip            |
 | **CodeQL**                              | GitHub's security-extended queries, weekly and on every push                                                                                                                                                                     |
 | **Multi-arch image build**              | `linux/amd64` and `linux/arm64`                                                                                                                                                                                                  |
 

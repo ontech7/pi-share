@@ -59,8 +59,8 @@ export function LinksScreen() {
 
 function LinkCard({ link }: { link: LinkSummary }) {
   const { t, lang } = useI18n();
-  const size = link.files.reduce((total, file) => total + file.size, 0);
-  const names = link.files.map((file) => file.name);
+  const size = link.items.reduce((total, item) => total + item.size, 0);
+  const names = link.items.map((item) => (item.kind === 'folder' ? `${item.name}/` : item.name));
 
   return (
     <Link

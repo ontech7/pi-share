@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
+import type { ChangePolicy, LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Button } from '../../ui/Button.tsx';
 import { Dialog } from '../../ui/Dialog.tsx';
 import { Field } from '../../ui/Field.tsx';
 import { Switch } from '../../ui/Switch.tsx';
 import { api, keys } from '../api.ts';
+import { PolicyPicker } from '../create/PolicyPicker.tsx';
 
 const toDateInput = (ms: number | null) =>
   ms ? new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '';
@@ -19,6 +20,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
   const [maxDownloads, setMaxDownloads] = useState(link.maxDownloads ? String(link.maxDownloads) : '');
   const [removePassword, setRemovePassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+  const [onChange, setOnChange] = useState<ChangePolicy>(link.onChange);
 
   const save = useMutation({
     mutationFn: () => {
@@ -26,6 +28,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
         label,
         expiresAt: expires ? new Date(expires).getTime() : null,
         maxDownloads: maxDownloads ? Number(maxDownloads) : null,
+        onChange,
       };
       if (newPassword) patch.password = newPassword;
       else if (removePassword) patch.password = null;
@@ -91,6 +94,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
           className="[&_input]:font-mono"
           onChange={(event) => setNewPassword(event.target.value)}
         />
+        <PolicyPicker value={onChange} onChange={setOnChange} />
         {link.hasPassword && !newPassword && (
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm">{t('detail.passwordRemove')}</span>

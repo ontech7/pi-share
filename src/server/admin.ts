@@ -17,6 +17,8 @@ import {
   changePasswordBody,
   createLinkBody,
   loginBody,
+  type Preferences,
+  preferencesBody,
   type ServiceState,
   type SessionState,
   serviceBody,
@@ -97,6 +99,8 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
   app.addHook('onRequest', async (request, reply) => {
     if (!isAllowed(allowed, request.ip)) return reply.code(403).send({ error: 'forbidden_network' });
     const host = (request.headers.host ?? '').replace(/:\d+$/, '').toLowerCase();
+    // The container's own health probe comes from inside, by address: it answers nothing about links.
+    if (request.routeOptions.url === '/healthz') return;
     if (config.adminHosts.length && !config.adminHosts.includes(host))
       return reply.code(421).send({ error: 'wrong_host' });
 
@@ -144,6 +148,13 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     activeLinks: shares.activeCount(),
     publicUrl: config.publicUrl,
   });
+
+  const defaults: Preferences = {
+    onChange: 'pause',
+    expiryDays: config.defaultExpiryDays,
+    maxDownloads: null,
+    generatePassword: false,
+  };
 
   app.get('/healthz', async () => ({ ok: true }));
 
@@ -211,11 +222,16 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     async (request) => storage.browse(request.query.path),
   );
 
+  app.get('/api/preferences', async () => settings.preferences(defaults));
+  app.patch('/api/preferences', { schema: { body: preferencesBody } }, async (request) =>
+    settings.updatePreferences(request.body, defaults),
+  );
+
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 
   app.get('/api/links', async () => shares.list());
   app.post('/api/links', { schema: { body: createLinkBody } }, async (request, reply) =>
-    reply.code(201).send(await shares.create(request.body)),
+    reply.code(201).send(await shares.create(request.body, settings.preferences(defaults).onChange)),
   );
   app.get('/api/links/:id', { schema: { params: linkParams } }, async (request) => shares.detail(request.params.id));
   app.patch('/api/links/:id', { schema: { params: linkParams, body: updateLinkBody } }, async (request) =>

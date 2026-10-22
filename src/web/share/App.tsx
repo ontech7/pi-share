@@ -1,6 +1,17 @@
-import { CircleSlash, KeyRound, LinkIcon, MonitorX, ShieldCheck, TimerOff } from 'lucide-react';
+import {
+  CirclePause,
+  CircleSlash,
+  KeyRound,
+  LinkIcon,
+  LockKeyhole,
+  MonitorX,
+  ShieldCheck,
+  TimerOff,
+} from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import type { LinkState } from '../../shared/api.ts';
 import { formatDate } from '../lib/format.ts';
+import type { MessageKey } from '../lib/i18n.ts';
 import { useI18n } from '../lib/i18n-context.tsx';
 import { Button } from '../ui/Button.tsx';
 import { Card } from '../ui/Card.tsx';
@@ -10,12 +21,13 @@ import { Spinner } from '../ui/Spinner.tsx';
 import { useDownloads } from './downloads.ts';
 import { FileRow } from './FileRow.tsx';
 import { type Grant, type LinkRef, openLink, readLink, unlockLink, verifierFor } from './link.ts';
+import { Tree } from './Tree.tsx';
 
 type View =
   | { name: 'loading' }
   | { name: 'unsupported' }
   | { name: 'no-key' }
-  | { name: 'unavailable' }
+  | { name: 'unavailable'; reason?: LinkState }
   | { name: 'busy' }
   | { name: 'password' }
   | { name: 'files'; grant: Grant };
@@ -50,7 +62,7 @@ export function App() {
         if (result.kind === 'granted') setView({ name: 'files', grant: result.grant });
         else if (result.kind === 'password') setView({ name: 'password' });
         else if (result.kind === 'busy') setView({ name: 'busy' });
-        else setView({ name: 'unavailable' });
+        else setView({ name: 'unavailable', reason: result.kind === 'unavailable' ? result.reason : undefined });
       })
       .catch(() => setView({ name: 'unavailable' }));
   }, [link, view.name]);
@@ -73,15 +85,13 @@ export function App() {
             <Notice icon={<MonitorX />} title="share.unsupportedTitle" body="share.unsupportedBody" />
           )}
           {view.name === 'no-key' && <Notice icon={<LinkIcon />} title="share.noKeyTitle" body="share.noKeyBody" />}
-          {view.name === 'unavailable' && (
-            <Notice icon={<TimerOff />} title="share.unavailableTitle" body="share.unavailableBody" />
-          )}
+          {view.name === 'unavailable' && <Unavailable reason={view.reason} />}
           {view.name === 'busy' && <Notice icon={<CircleSlash />} title="share.tooManyRequests" body="share.busy" />}
           {view.name === 'password' && link && (
             <PasswordForm
               link={link}
               onGranted={(grant) => setView({ name: 'files', grant })}
-              onUnavailable={() => setView({ name: 'unavailable' })}
+              onUnavailable={(reason) => setView({ name: 'unavailable', reason })}
             />
           )}
           {view.name === 'files' && link && <Files link={link} initial={view.grant} />}
@@ -114,15 +124,26 @@ function Footer() {
   );
 }
 
-function Notice({
-  icon,
-  title,
-  body,
-}: {
-  icon: ReactNode;
-  title: 'share.unsupportedTitle' | 'share.noKeyTitle' | 'share.unavailableTitle' | 'share.tooManyRequests';
-  body: 'share.unsupportedBody' | 'share.noKeyBody' | 'share.unavailableBody' | 'share.busy';
-}) {
+const REASONS: Partial<Record<LinkState, { icon: ReactNode; title: MessageKey; body: MessageKey }>> = {
+  paused: { icon: <CirclePause />, title: 'share.pausedTitle', body: 'share.pausedBody' },
+  expired: { icon: <TimerOff />, title: 'share.unavailableTitle', body: 'share.expiredBody' },
+  exhausted: { icon: <TimerOff />, title: 'share.unavailableTitle', body: 'share.exhaustedBody' },
+  disabled: { icon: <CircleSlash />, title: 'share.unavailableTitle', body: 'share.disabledBody' },
+  locked: { icon: <LockKeyhole />, title: 'share.unavailableTitle', body: 'share.lockedBody' },
+  unavailable: { icon: <TimerOff />, title: 'share.unavailableTitle', body: 'share.goneBody' },
+};
+
+/** Only someone holding the whole link learns the reason; anyone else gets the generic notice. */
+function Unavailable({ reason }: { reason?: LinkState }) {
+  const known = reason ? REASONS[reason] : undefined;
+  return known ? (
+    <Notice icon={known.icon} title={known.title} body={known.body} />
+  ) : (
+    <Notice icon={<TimerOff />} title="share.unavailableTitle" body="share.unavailableBody" />
+  );
+}
+
+function Notice({ icon, title, body }: { icon: ReactNode; title: MessageKey; body: MessageKey }) {
   const { t } = useI18n();
   return (
     <Card className="flex animate-enter flex-col items-center gap-3 px-6 py-12 text-center">
@@ -140,7 +161,7 @@ function PasswordForm({
 }: {
   link: LinkRef;
   onGranted: (grant: Grant) => void;
-  onUnavailable: () => void;
+  onUnavailable: (reason?: LinkState) => void;
 }) {
   const { t } = useI18n();
   const [password, setPassword] = useState('');
@@ -163,7 +184,7 @@ function PasswordForm({
               onGranted(result.grant);
             } else if (result.kind === 'wrong') setError(t('share.wrongPassword'));
             else if (result.kind === 'busy') setError(t('share.tooManyRequests'));
-            else onUnavailable();
+            else onUnavailable(result.kind === 'unavailable' ? result.reason : undefined);
           } catch {
             setError(t('common.error'));
           } finally {
@@ -210,9 +231,9 @@ function Files({ link, initial }: { link: LinkRef; initial: Grant }) {
   }, [link]);
 
   const downloads = useDownloads(link, grant.ticket, refreshTicket);
-  const { files, bundle, expiresAt } = grant.meta;
+  const { entries, bundle, expiresAt } = grant.meta;
   const idle = { status: 'idle' } as const;
-  const largest = Math.max(bundle?.size ?? 0, ...files.map((file) => file.size));
+  const largest = entries.reduce((max, entry) => Math.max(max, entry.size), bundle?.size ?? 0);
 
   return (
     <div className="flex animate-enter flex-col gap-4">
@@ -224,17 +245,14 @@ function Files({ link, initial }: { link: LinkRef; initial: Grant }) {
       </div>
 
       <Card className="divide-y divide-line overflow-hidden">
-        {files.map((file, position) => (
-          <FileRow
-            // biome-ignore lint/suspicious/noArrayIndexKey: the position is the file's identity inside the link
-            key={`${position}-${file.name}`}
-            name={file.name}
-            size={file.size}
-            available={file.available && downloads.ready}
-            state={downloads.states[String(position)] ?? idle}
-            onDownload={() => downloads.start({ part: position, name: file.name, size: file.size })}
-          />
-        ))}
+        <Tree
+          entries={entries}
+          ready={downloads.ready}
+          states={downloads.states}
+          onDownload={(entry) =>
+            downloads.start({ part: entry.id, name: entry.path.split('/').at(-1) as string, size: entry.size })
+          }
+        />
       </Card>
 
       {bundle && (

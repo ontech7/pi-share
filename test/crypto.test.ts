@@ -31,14 +31,14 @@ function chunked(buffer: Buffer): Buffer[] {
   return parts;
 }
 
-async function encrypt(plain: Buffer, record?: number, part: number | 'all' = 0): Promise<Buffer> {
+async function encrypt(plain: Buffer, record?: number, part = 'abc'): Promise<Buffer> {
   const out: Buffer[] = [];
   for await (const chunk of Readable.from(chunked(plain)).pipe(encryptStream(key, 'link', part, record)))
     out.push(chunk);
   return Buffer.concat(out);
 }
 
-async function decrypt(wire: Buffer, part: number | 'all' = 0): Promise<Buffer> {
+async function decrypt(wire: Buffer, part = 'abc'): Promise<Buffer> {
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of chunked(wire)) controller.enqueue(new Uint8Array(chunk));
@@ -69,7 +69,7 @@ describe('stream encryption', () => {
     await expect(decrypt(flipped)).rejects.toThrow('integrity');
     await expect(decrypt(wire.subarray(0, 24 + 4 * (1024 + 16)))).rejects.toThrow('integrity');
     await expect(decrypt(wire.subarray(0, 10))).rejects.toThrow('truncated');
-    await expect(decrypt(wire, 1)).rejects.toThrow('integrity');
+    await expect(decrypt(wire, 'other')).rejects.toThrow('integrity');
   });
 
   it('uses a fresh salt for every download', async () => {
@@ -80,8 +80,8 @@ describe('stream encryption', () => {
 
 describe('metadata and passwords', () => {
   it('opens metadata only with the right key and link id', async () => {
-    const sealed = sealMeta(key, 'abc', { files: [{ name: 'è.zip', size: 3 }] });
-    expect(await openMeta(browserKey, 'abc', sealed)).toEqual({ files: [{ name: 'è.zip', size: 3 }] });
+    const sealed = sealMeta(key, 'abc', { entries: [{ id: 'x', path: 'è.zip', size: 3 }] });
+    expect(await openMeta(browserKey, 'abc', sealed)).toEqual({ entries: [{ id: 'x', path: 'è.zip', size: 3 }] });
     await expect(openMeta(browserKey, 'abd', sealed)).rejects.toThrow();
     await expect(openMeta(new Uint8Array(crypto.randomBytes(32)), 'abc', sealed)).rejects.toThrow();
   });

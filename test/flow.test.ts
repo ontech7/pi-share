@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildAdmin } from '../src/server/admin.ts';
 import { buildBroker } from '../src/server/broker.ts';
 import { loadConfig } from '../src/server/config.ts';
+import { entryId } from '../src/server/content.ts';
 import { loadOrCreateKey, Vault } from '../src/server/crypto.ts';
 import { openDatabase } from '../src/server/db/index.ts';
 import { buildEdge } from '../src/server/edge.ts';
@@ -64,7 +65,7 @@ const edgeCall = (visitor: Visitor, method: 'GET' | 'POST', url: string, payload
     },
   });
 
-async function decrypt(body: Buffer, key: Uint8Array<ArrayBuffer>, id: string, part: number | 'all') {
+async function decrypt(body: Buffer, key: Uint8Array<ArrayBuffer>, id: string, part: string) {
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new Uint8Array(body));
@@ -163,17 +164,19 @@ describe('admin access', () => {
     const { body } = await adminCall('GET', '/api/browse?path=');
     expect(body.entries.map((entry: { name: string }) => entry.name)).toEqual(['Work']);
     expect((await adminCall('GET', '/api/browse?path=Private')).status).toBe(400);
-    expect((await adminCall('POST', '/api/links', { files: ['Private/secret.txt'] })).status).toBe(400);
+    expect((await adminCall('POST', '/api/links', { paths: ['Private/secret.txt'] })).status).toBe(400);
   });
 });
 
 describe('sharing flow', () => {
+  const first = entryId(0, '');
+  const second = entryId(1, '');
   let link: LinkDetail;
   let key: Uint8Array<ArrayBuffer>;
 
   it('creates a password-protected link with two files', async () => {
     const created = await adminCall('POST', '/api/links', {
-      files: ['Work/report.bin', 'Work/notes.txt'],
+      paths: ['Work/report.bin', 'Work/notes.txt'],
       label: 'Q3 report',
       password: 'open sesame',
     });
@@ -188,7 +191,7 @@ describe('sharing flow', () => {
     const visitor = await visit(link.id);
     const open = await openCall(visitor, link);
     expect(open.json()).toEqual({ passwordRequired: true });
-    const sneaky = await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/0`);
+    const sneaky = await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/${first}`);
     expect(sneaky.statusCode).toBe(403);
   });
 
@@ -202,16 +205,16 @@ describe('sharing flow', () => {
     expect(unlock.statusCode).toBe(200);
     const { meta, ticket } = unlock.json() as { meta: Sealed; ticket: string };
     const shareMeta = await openMeta<ShareMeta>(key, link.id, meta);
-    expect(shareMeta.files).toEqual([
-      { name: 'report.bin', size: report.length, available: true },
-      { name: 'notes.txt', size: 5, available: true },
+    expect(shareMeta.entries).toEqual([
+      { id: first, path: 'report.bin', size: report.length },
+      { id: second, path: 'notes.txt', size: 5 },
     ]);
     expect(shareMeta.bundle?.name).toBe('Q3 report.zip');
 
-    const file = await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket);
+    const file = await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/${first}`, undefined, ticket);
     expect(file.statusCode).toBe(200);
     expect(Number(file.headers['content-length'])).toBe(file.rawPayload.length);
-    expect(await decrypt(file.rawPayload, key, link.id, 0)).toEqual(report);
+    expect(await decrypt(file.rawPayload, key, link.id, first)).toEqual(report);
     const downloadId = String(file.headers['x-download-id']);
     const result = await edgeCall(
       visitor,
@@ -230,7 +233,7 @@ describe('sharing flow', () => {
     expect(execFileSync('unzip', ['-t', zipFile]).toString()).toContain('No errors detected');
 
     const otherVisitor = await visit(link.id, { ip: '198.51.100.1' });
-    const stolen = await edgeCall(otherVisitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket);
+    const stolen = await edgeCall(otherVisitor, 'GET', `/api/links/${link.id}/files/${first}`, undefined, ticket);
     expect(stolen.statusCode).toBe(403);
   });
 
@@ -271,22 +274,30 @@ describe('sharing flow', () => {
     expect((await adminCall('GET', `/api/links/${link.id}`)).body.state).toBe('active');
   });
 
-  it('notices a changed or deleted file and only serves what is still intact', async () => {
+  it('pauses the whole link when a file changes, until the change is accepted', async () => {
     const storageRoot = path.join(root, 'storage');
-    fs.writeFileSync(path.join(storageRoot, 'Work/notes.txt'), 'changed!');
-    let detail = (await adminCall('GET', `/api/links/${link.id}`)).body as LinkDetail;
-    expect(detail.files.map((file) => file.state)).toEqual(['ok', 'changed']);
-
     const visitor = await visit(link.id);
     await openCall(visitor, link);
-    const unlock = await unlockCall(visitor, link, 'open sesame');
-    const { ticket } = unlock.json() as { ticket: string };
-    expect((await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/1`, undefined, ticket)).statusCode).toBe(404);
-    expect((await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/all`, undefined, ticket)).statusCode).toBe(404);
+    const { ticket } = (await unlockCall(visitor, link, 'open sesame')).json() as { ticket: string };
 
-    await adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: true });
+    fs.writeFileSync(path.join(storageRoot, 'Work/notes.txt'), 'changed!');
+    let detail = (await adminCall('GET', `/api/links/${link.id}`)).body as LinkDetail;
+    expect(detail.state).toBe('paused');
+    expect(detail.items.map((item) => item.state)).toEqual(['ok', 'changed']);
+    expect(detail.changes).toEqual([{ path: 'notes.txt', change: 'changed' }]);
+
+    const refused = await openCall(visitor, link);
+    expect(refused.statusCode).toBe(404);
+    expect(refused.json()).toEqual({ error: 'unavailable', reason: 'paused' });
+    expect((await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/${first}`, undefined, ticket)).statusCode).toBe(
+      404,
+    );
+
+    await adminCall('PATCH', `/api/links/${link.id}`, { acceptChanges: detail.version });
     detail = (await adminCall('GET', `/api/links/${link.id}`)).body;
-    expect(detail.files.map((file) => file.state)).toEqual(['ok', 'ok']);
+    expect(detail.state).toBe('active');
+    expect(detail.items.map((item) => item.state)).toEqual(['ok', 'ok']);
+    expect(detail.items[1]?.size).toBe(8);
 
     fs.rmSync(path.join(storageRoot, 'Work/report.bin'));
     fs.rmSync(path.join(storageRoot, 'Work/notes.txt'));
@@ -297,13 +308,13 @@ describe('sharing flow', () => {
 
 describe('service switch', () => {
   it('answers 404 to everything when switched off, and when no link is active with auto-off', async () => {
-    const { body: created } = await adminCall('POST', '/api/links', { files: ['Work/report.bin'] }).catch(() => ({
+    const { body: created } = await adminCall('POST', '/api/links', { paths: ['Work/report.bin'] }).catch(() => ({
       body: null,
     }));
     expect(created).toMatchObject({ error: 'file_not_found' });
 
     writeFiles(path.join(root, 'storage'), { 'Work/again.txt': 'again' });
-    const { body: link } = await adminCall('POST', '/api/links', { files: ['Work/again.txt'] });
+    const { body: link } = await adminCall('POST', '/api/links', { paths: ['Work/again.txt'] });
     const visitor = await visit(link.id);
 
     expect((await adminCall('PATCH', '/api/service', { enabled: false })).body).toMatchObject({ enabled: false });

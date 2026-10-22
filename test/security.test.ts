@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { entryId } from '../src/server/content.ts';
 import type { LinkDetail } from '../src/shared/api.ts';
 import { startStack } from './stack.ts';
 
@@ -28,7 +29,7 @@ describe('admin boundary', () => {
     const created = await stack.admin.inject({
       method: 'POST',
       url: '/%61pi/links',
-      payload: { files: ['Work/a.txt'] },
+      payload: { paths: ['Work/a.txt'] },
     });
     expect(created.statusCode).not.toBe(201);
   });
@@ -61,7 +62,7 @@ describe('admin boundary', () => {
 
 describe('link id without the key', () => {
   it('opens nothing, logs nothing and cannot lock the link', async () => {
-    const link = await create({ files: ['Work/a.txt'], password: 'secret' });
+    const link = await create({ paths: ['Work/a.txt'], password: 'secret' });
     const visitor = await stack.visit(link.id);
     const fakeProof = 'A'.repeat(43);
     for (let i = 0; i < 5; i++) {
@@ -80,7 +81,7 @@ describe('link id without the key', () => {
   });
 
   it('refuses API calls without the visitor cookie set by the page', async () => {
-    const link = await create({ files: ['Work/a.txt'] });
+    const link = await create({ paths: ['Work/a.txt'] });
     const response = await stack.call({ cookie: '', ip: '198.51.100.9' }, 'POST', `/api/links/${link.id}/open`, {
       proof: 'A'.repeat(43),
     });
@@ -90,7 +91,7 @@ describe('link id without the key', () => {
 
 describe('passwords and tickets', () => {
   it('resets the wrong-password counter after a correct password', async () => {
-    const link = await create({ files: ['Work/a.txt'], password: 'secret' });
+    const link = await create({ paths: ['Work/a.txt'], password: 'secret' });
     const visitor = await stack.visit(link.id, '198.51.100.31');
     for (let round = 0; round < 3; round++) {
       expect((await stack.unlock(visitor, link, 'wrong')).statusCode).toBe(403);
@@ -101,26 +102,30 @@ describe('passwords and tickets', () => {
   });
 
   it('does not count a ticket renewal without a password as a wrong password', async () => {
-    const link = await create({ files: ['Work/a.txt'], password: 'secret' });
+    const link = await create({ paths: ['Work/a.txt'], password: 'secret' });
     const visitor = await stack.visit(link.id, '198.51.100.32');
     for (let i = 0; i < 4; i++) expect((await stack.unlock(visitor, link)).statusCode).toBe(403);
     expect(((await stack.adminCall('GET', `/api/links/${link.id}`)).body as LinkDetail).counts.failedPasswords).toBe(0);
   });
 
   it('invalidates tickets when the password changes', async () => {
-    const link = await create({ files: ['Work/a.txt'], password: 'secret' });
+    const link = await create({ paths: ['Work/a.txt'], password: 'secret' });
     const visitor = await stack.visit(link.id, '198.51.100.33');
     const { ticket } = (await stack.unlock(visitor, link, 'secret')).json() as { ticket: string };
-    expect((await stack.call(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket)).statusCode).toBe(200);
+    expect(
+      (await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket)).statusCode,
+    ).toBe(200);
     await stack.adminCall('PATCH', `/api/links/${link.id}`, { password: 'another one' });
-    expect((await stack.call(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket)).statusCode).toBe(403);
+    expect(
+      (await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket)).statusCode,
+    ).toBe(403);
   });
 
   it('accepts one result per download, only from the visitor holding the ticket', async () => {
-    const link = await create({ files: ['Work/a.txt'] });
+    const link = await create({ paths: ['Work/a.txt'] });
     const visitor = await stack.visit(link.id);
     const { ticket } = (await stack.open(visitor, link)).json() as { ticket: string };
-    const file = await stack.call(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket);
+    const file = await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket);
     const url = `/api/links/${link.id}/downloads/${file.headers['x-download-id']}/result`;
     const other = await stack.visit(link.id, '198.51.100.2');
     expect((await stack.call(other, 'POST', url, { ok: true }, ticket)).statusCode).toBe(403);
@@ -132,10 +137,10 @@ describe('passwords and tickets', () => {
 
 describe('download limits', () => {
   it('counts every started download against the limit', async () => {
-    const link = await create({ files: ['Work/b.txt'], maxDownloads: 2 });
+    const link = await create({ paths: ['Work/b.txt'], maxDownloads: 2 });
     const visitor = await stack.visit(link.id);
     const { ticket } = (await stack.open(visitor, link)).json() as { ticket: string };
-    const url = `/api/links/${link.id}/files/0`;
+    const url = `/api/links/${link.id}/files/${entryId(0, '')}`;
     expect((await stack.call(visitor, 'GET', url, undefined, ticket)).statusCode).toBe(200);
     expect((await stack.call(visitor, 'GET', url, undefined, ticket)).statusCode).toBe(200);
     expect((await stack.call(visitor, 'GET', url, undefined, ticket)).statusCode).toBe(404);
@@ -145,7 +150,7 @@ describe('download limits', () => {
 
 describe('visit logging', () => {
   it('keeps the address and visitor even with oversized headers', async () => {
-    const link = await create({ files: ['Work/c.txt'] });
+    const link = await create({ paths: ['Work/c.txt'] });
     const visitor = { ...(await stack.visit(link.id, '192.0.2.77')), userAgent: `Mozilla/5.0 ${'x'.repeat(5000)}` };
     await stack.open(visitor, link);
     const [event] = ((await stack.adminCall('GET', `/api/links/${link.id}`)).body as LinkDetail).events;
@@ -157,7 +162,7 @@ describe('visit logging', () => {
 
 describe('files swapped on disk', () => {
   it('refuses a linked file replaced by a symbolic link after the link was created', async () => {
-    const link = await create({ files: ['Work/d.txt'] });
+    const link = await create({ paths: ['Work/d.txt'] });
     const target = path.join(stack.storageRoot, 'Work/d.txt');
     const { mtime, atime } = fs.statSync(target);
     fs.rmSync(target);
@@ -169,9 +174,10 @@ describe('files swapped on disk', () => {
     const opened = await stack.open(visitor, link);
     if (opened.statusCode === 200) {
       const { ticket } = opened.json() as { ticket: string };
-      expect((await stack.call(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket)).statusCode).toBe(
-        404,
-      );
+      expect(
+        (await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket))
+          .statusCode,
+      ).toBe(404);
     } else {
       expect(opened.statusCode).toBe(404);
     }
@@ -180,7 +186,7 @@ describe('files swapped on disk', () => {
 
 describe('parallel wrong passwords', () => {
   it('still lock the link', async () => {
-    const link = await create({ files: ['Work/a.txt'], password: 'secret' });
+    const link = await create({ paths: ['Work/a.txt'], password: 'secret' });
     const visitors = await Promise.all(
       Array.from({ length: 8 }, (_, i) => stack.visit(link.id, `198.51.100.${100 + i}`)),
     );
@@ -195,7 +201,7 @@ describe('files swapped on disk, through a directory', () => {
   it('refuses a file whose parent folder became a symbolic link', async () => {
     fs.mkdirSync(path.join(stack.storageRoot, 'Swap'));
     fs.writeFileSync(path.join(stack.storageRoot, 'Swap/e.txt'), 'eeee');
-    const link = await create({ files: ['Swap/e.txt'] });
+    const link = await create({ paths: ['Swap/e.txt'] });
     const original = fs.statSync(path.join(stack.storageRoot, 'Swap/e.txt'));
     const outside = path.join(stack.root, 'elsewhere');
     fs.mkdirSync(outside);
@@ -208,9 +214,10 @@ describe('files swapped on disk, through a directory', () => {
     const opened = await stack.open(visitor, link);
     if (opened.statusCode === 200) {
       const { ticket } = opened.json() as { ticket: string };
-      expect((await stack.call(visitor, 'GET', `/api/links/${link.id}/files/0`, undefined, ticket)).statusCode).toBe(
-        404,
-      );
+      expect(
+        (await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket))
+          .statusCode,
+      ).toBe(404);
     } else {
       expect(opened.statusCode).toBe(404);
     }

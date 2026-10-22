@@ -51,6 +51,7 @@ export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
         ))}
         {listing.isFetching && <Spinner className="ml-1 text-muted" />}
       </nav>
+      <p className="-mt-1 text-xs text-muted">{t('create.folderHint')}</p>
 
       <div className="overflow-hidden rounded-2xl border border-line">
         {listing.isError ? (
@@ -68,43 +69,73 @@ export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
         ) : (
           <ul className="max-h-[46dvh] divide-y divide-line overflow-y-auto overscroll-contain">
             {listing.data.entries.map((entry) => {
-              const isSelected = selected.has(entry.path);
+              const included = covered(selected, entry.path);
+              const isSelected = included || selected.has(entry.path);
+              const box = (
+                <span
+                  className={clsx(
+                    'grid size-5 shrink-0 place-items-center rounded-md border transition-colors',
+                    isSelected ? 'border-transparent bg-accent text-on-accent' : 'border-line',
+                    included && 'opacity-50',
+                  )}
+                >
+                  {isSelected ? (
+                    <Check className="size-3.5 animate-pop" strokeWidth={3} />
+                  ) : (
+                    entry.type === 'file' && <File className="size-3 text-muted" />
+                  )}
+                </span>
+              );
+              const meta =
+                entry.type === 'file' ? (
+                  <span className="shrink-0 text-right text-xs text-muted tabular">
+                    {formatBytes(entry.size, lang)}
+                    <span className="hidden sm:inline"> · {formatDate(entry.modifiedAt, lang)}</span>
+                  </span>
+                ) : (
+                  <ChevronRight className="size-4 shrink-0 text-muted" />
+                );
+              const rowClass = clsx('transition-colors', isSelected ? 'bg-accent/12' : 'hover:bg-surface-2');
+
+              if (entry.type === 'file') {
+                return (
+                  <li key={entry.path} className={rowClass}>
+                    <button
+                      type="button"
+                      disabled={included}
+                      title={included ? t('create.included') : undefined}
+                      onClick={() => onToggle(entry)}
+                      aria-pressed={isSelected}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                    >
+                      {box}
+                      <span className="min-w-0 flex-1 truncate text-[15px]">{entry.name}</span>
+                      {meta}
+                    </button>
+                  </li>
+                );
+              }
               return (
-                <li key={entry.path}>
+                <li key={entry.path} className={clsx(rowClass, 'flex items-stretch')}>
                   <button
                     type="button"
-                    onClick={() => (entry.type === 'dir' ? onNavigate(entry.path) : onToggle(entry))}
-                    aria-pressed={entry.type === 'file' ? isSelected : undefined}
-                    className={clsx(
-                      'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
-                      isSelected ? 'bg-accent/12' : 'hover:bg-surface-2',
-                    )}
+                    disabled={included}
+                    title={included ? t('create.included') : undefined}
+                    onClick={() => onToggle(entry)}
+                    aria-pressed={isSelected}
+                    aria-label={`${t('create.folder')} ${entry.name}`}
+                    className="press grid shrink-0 place-items-center py-3 pr-2 pl-4"
                   >
-                    {entry.type === 'dir' ? (
-                      <Folder className="size-5 shrink-0 text-accent-strong" />
-                    ) : (
-                      <span
-                        className={clsx(
-                          'grid size-5 shrink-0 place-items-center rounded-md border transition-colors',
-                          isSelected ? 'border-transparent bg-accent text-on-accent' : 'border-line',
-                        )}
-                      >
-                        {isSelected ? (
-                          <Check className="size-3.5 animate-pop" strokeWidth={3} />
-                        ) : (
-                          <File className="size-3 text-muted" />
-                        )}
-                      </span>
-                    )}
+                    {box}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate(entry.path)}
+                    className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-4 pl-1 text-left"
+                  >
+                    <Folder className="size-5 shrink-0 text-accent-strong" />
                     <span className="min-w-0 flex-1 truncate text-[15px]">{entry.name}</span>
-                    {entry.type === 'file' ? (
-                      <span className="shrink-0 text-right text-xs text-muted tabular">
-                        {formatBytes(entry.size, lang)}
-                        <span className="hidden sm:inline"> · {formatDate(entry.modifiedAt, lang)}</span>
-                      </span>
-                    ) : (
-                      <ChevronRight className="size-4 shrink-0 text-muted" />
-                    )}
+                    {meta}
                   </button>
                 </li>
               );
@@ -114,4 +145,12 @@ export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
       </div>
     </div>
   );
+}
+
+/** Whether a path sits inside a folder that is already selected as a whole. */
+function covered(selected: Map<string, BrowseEntry>, path: string): boolean {
+  for (const [selectedPath, entry] of selected) {
+    if (entry.type === 'dir' && path.startsWith(`${selectedPath}/`)) return true;
+  }
+  return false;
 }

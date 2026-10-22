@@ -87,6 +87,8 @@ const chrome = spawn(
     '--no-first-run',
     '--lang=en-US',
     '--window-size=1280,900',
+    // CI runners (Ubuntu 24.04) forbid the user namespaces Chrome's sandbox needs; the page under test is our own.
+    ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
   ],
   { stdio: 'ignore', env: { ...process.env, LANG: 'en_US.UTF-8', LANGUAGE: 'en' } },
 );

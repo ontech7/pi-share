@@ -147,14 +147,17 @@ export async function verifySecret(stored: string | null, secret: string): Promi
 }
 
 export function loadOrCreateKey(file: string): Buffer {
-  if (fs.existsSync(file)) {
-    const key = fs.readFileSync(file);
-    if (key.length !== 32) throw new Error(`${file} must contain exactly 32 bytes`);
-    return key;
-  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const key = crypto.randomBytes(32);
-  fs.writeFileSync(file, key, { mode: 0o600, flag: 'wx' });
+  try {
+    // Exclusive create: if two processes start at once, one writes and the other reads that key.
+    const key = crypto.randomBytes(32);
+    fs.writeFileSync(file, key, { mode: 0o600, flag: 'wx' });
+    return key;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const key = fs.readFileSync(file);
+  if (key.length !== 32) throw new Error(`${file} must contain exactly 32 bytes`);
   return key;
 }
 

@@ -117,8 +117,10 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
       return reply.code(400).send({ error: 'invalid', issues: error.validation });
     if (error instanceof z.ZodError) return reply.code(400).send({ error: 'invalid', issues: error.issues });
     if (error instanceof ShareError) return reply.code(error.status).send({ error: error.code, ...error.data });
-    if (error instanceof StorageError)
-      return reply.code(error.code === 'not_found' ? 404 : 400).send({ error: error.code });
+    if (error instanceof StorageError) {
+      const status = error.code === 'not_found' ? 404 : error.code === 'unreadable' ? 403 : 400;
+      return reply.code(status).send({ error: error.code });
+    }
     const status = (error as { statusCode?: number }).statusCode;
     if (status && status < 500) return reply.code(status).send({ error: (error as Error).message });
     app.log.error(error);

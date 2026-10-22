@@ -1,15 +1,15 @@
+import clsx from 'clsx';
 import { Settings2 } from 'lucide-react';
-import { type ReactNode, useState } from 'react';
-import { Link } from 'wouter';
+import type { ReactNode } from 'react';
+import { Link, useLocation } from 'wouter';
 import { useI18n } from '../lib/i18n-context.tsx';
-import { IconButton } from '../ui/Button.tsx';
 import { Logo } from '../ui/Logo.tsx';
 import { ServiceToggle } from './ServiceToggle.tsx';
-import { SettingsDialog } from './SettingsDialog.tsx';
 
 export function Shell({ children }: { children: ReactNode }) {
   const { t } = useI18n();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [location] = useLocation();
+  const inSettings = location.startsWith('/settings');
 
   return (
     <div className="min-h-dvh">
@@ -21,16 +21,22 @@ export function Shell({ children }: { children: ReactNode }) {
           </Link>
           <div className="flex items-center gap-2">
             <ServiceToggle />
-            <IconButton
-              label={t('settings.title')}
-              icon={<Settings2 className="size-5" />}
-              onClick={() => setSettingsOpen(true)}
-            />
+            <Link
+              href="/settings"
+              aria-label={t('settings.title')}
+              title={t('settings.title')}
+              aria-current={inSettings ? 'page' : undefined}
+              className={clsx(
+                'press grid size-10 place-items-center rounded-xl transition-colors',
+                inSettings ? 'bg-surface-2 text-accent-strong' : 'text-muted hover:bg-surface-2 hover:text-fg',
+              )}
+            >
+              <Settings2 className="size-5" />
+            </Link>
           </div>
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-4 pt-6 pb-24 sm:px-6 sm:pt-10">{children}</main>
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

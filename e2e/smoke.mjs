@@ -315,6 +315,19 @@ try {
   await until(() => fs.existsSync(path.join(downloads, 'Work.zip')), 'folder zip on disk');
   assert(folder.errors.length === 0, `folder page without errors ${folder.errors.join(' | ')}`);
 
+  console.log('settings');
+  await panel.go(`${ADMIN}/settings`);
+  await panel.text('Public page on');
+  await panel.shot('09-settings-mobile', { width: 390, height: 844, mobile: true });
+  await panel.click('New links');
+  await panel.text('Where every new link starts from');
+  await panel.click('Follow the changes');
+  await panel.text('Saved');
+  await panel.shot('10-settings');
+  await panel.shot('10-settings-mobile', { width: 390, height: 844, mobile: true });
+  const saved = await panel.eval(`fetch('/api/preferences').then((r) => r.json())`);
+  assert(saved.onChange === 'follow', 'settings page saves the defaults for new links');
+
   assert(panel.errors.length === 0, `admin without errors ${panel.errors.join(' | ')}`);
   console.log('\nsmoke test passed');
 } catch (error) {

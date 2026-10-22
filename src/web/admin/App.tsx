@@ -8,6 +8,7 @@ import { Shell } from './Shell.tsx';
 import { LinkScreen } from './screens/LinkScreen.tsx';
 import { LinksScreen } from './screens/LinksScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
+import { SettingsScreen } from './screens/SettingsScreen.tsx';
 import { SetupScreen } from './screens/SetupScreen.tsx';
 
 export function App() {
@@ -29,6 +30,7 @@ export function App() {
         <Shell>
           <Switch>
             <Route path="/links/:id">{(params) => <LinkScreen id={params.id} />}</Route>
+            <Route path="/settings/:section?">{(params) => <SettingsScreen section={params.section} />}</Route>
             <Route>
               <LinksScreen />
             </Route>

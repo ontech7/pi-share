@@ -8,3 +8,4 @@ dist/
 .env
 e2e/.out/
 coverage/
+__pycache__/

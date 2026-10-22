@@ -58,6 +58,15 @@ export class Settings {
     return next;
   }
 
+  updates(autoCheckDefault: boolean): { autoCheck: boolean } {
+    const stored = this.get<{ autoCheck?: unknown }>('updates', {});
+    return { autoCheck: typeof stored.autoCheck === 'boolean' ? stored.autoCheck : autoCheckDefault };
+  }
+
+  setUpdates(value: { autoCheck: boolean }) {
+    this.set('updates', value);
+  }
+
   hasAdminPassword(): boolean {
     return this.get<string | null>('adminPasswordHash', null) !== null;
   }

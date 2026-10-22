@@ -11,7 +11,8 @@ import { SensitiveList } from '../src/server/sensitive.ts';
 import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
 import { Storage } from '../src/server/storage.ts';
-import type { LinkDetail } from '../src/shared/api.ts';
+import { Updates } from '../src/server/updates.ts';
+import type { LinkDetail, ReleaseInfo } from '../src/shared/api.ts';
 import { fromBase64Url, keyProof, passwordVerifier } from '../src/shared/wire.ts';
 import { tempDir, writeFiles } from './helpers.ts';
 
@@ -47,7 +48,20 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
     maxPasswordFailures: config.maxPasswordFailures,
   });
   await settings.setAdminPassword('correct horse battery');
-  const admin = await buildAdmin({ config, shares, settings, storage, setupCode: null });
+  // What "GitHub" answers to update checks; tests change it with setRelease.
+  let release: ReleaseInfo | null = null;
+  const setRelease = (next: ReleaseInfo | null) => {
+    release = next;
+  };
+  const updates = new Updates({
+    current: '1.2.3',
+    fetchLatest: async () => release,
+    settings,
+    autoCheckDefault: false,
+    requestDir: config.updateRequestDir,
+    statusDir: config.updateStatusDir,
+  });
+  const admin = await buildAdmin({ config, shares, settings, storage, updates, setupCode: null });
   const broker = buildBroker({ shares, settings, storage, vault, secret: null });
   await listen(broker, config.brokerListen);
   const edge = await buildEdge({ config, brokerSecret: null, staticRoot, onlineCacheMs: 0 });
@@ -118,5 +132,20 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
       },
     });
 
-  return { root, storageRoot, admin, edge, shares, adminCall, visit, call, open, unlock, keyOf, rawDownload, close };
+  return {
+    root,
+    storageRoot,
+    admin,
+    edge,
+    shares,
+    adminCall,
+    visit,
+    call,
+    open,
+    unlock,
+    keyOf,
+    rawDownload,
+    setRelease,
+    close,
+  };
 }

@@ -6,6 +6,7 @@ import type {
   Preferences,
   ServiceState,
   SessionState,
+  UpdateInfo,
   UpdateLinkBody,
 } from '../../shared/api.ts';
 
@@ -49,6 +50,10 @@ export const api = {
     request<ServiceState>('PATCH', '/api/service', patch),
   preferences: () => request<Preferences>('GET', '/api/preferences'),
   updatePreferences: (patch: Partial<Preferences>) => request<Preferences>('PATCH', '/api/preferences', patch),
+  updates: () => request<UpdateInfo>('GET', '/api/updates'),
+  checkUpdates: () => request<UpdateInfo>('POST', '/api/updates/check'),
+  setAutoCheck: (autoCheck: boolean) => request<UpdateInfo>('PATCH', '/api/updates', { autoCheck }),
+  installUpdate: (version: string) => request<UpdateInfo>('POST', '/api/updates/install', { version }),
   browse: (path: string) => request<BrowseResult>('GET', `/api/browse?path=${encodeURIComponent(path)}`),
   links: () => request<LinkSummary[]>('GET', '/api/links'),
   link: (id: string) => request<LinkDetail>('GET', `/api/links/${id}`),
@@ -61,6 +66,7 @@ export const keys = {
   session: ['session'] as const,
   service: ['service'] as const,
   preferences: ['preferences'] as const,
+  updates: ['updates'] as const,
   links: ['links'] as const,
   link: (id: string) => ['links', id] as const,
   browse: (path: string) => ['browse', path] as const,

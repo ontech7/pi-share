@@ -45,6 +45,8 @@ const env = {
   DENY_PATHS: 'Private',
   ADMIN_LANG: 'en',
   LOG_LEVEL: 'warn',
+  // Offline and deterministic by default; E2E_UPDATES=1 checks the real GitHub releases.
+  UPDATE_CHECK: process.env.E2E_UPDATES ? 'true' : 'false',
 };
 
 const processes = [];
@@ -329,6 +331,19 @@ try {
   await panel.shot('10-settings-mobile', { width: 390, height: 844, mobile: true });
   const saved = await panel.eval(`fetch('/api/preferences').then((r) => r.json())`);
   assert(saved.onChange === 'follow', 'settings page saves the defaults for new links');
+
+  await panel.click('Updates');
+  await panel.text('Installed version');
+  const updates = await panel.eval(`fetch('/api/updates').then((r) => r.json())`);
+  assert(/^\d+\.\d+\.\d+$/.test(updates.current), `updates page knows the running version ${updates.current}`);
+  await panel.shot('11-updates');
+  if (process.env.E2E_UPDATES) {
+    await panel.click('Check now');
+    await panel.text('Latest release');
+    await sleep(1500);
+    await panel.shot('12-updates-checked');
+    await panel.shot('12-updates-checked-mobile', { width: 390, height: 844, mobile: true });
+  }
 
   assert(panel.errors.length === 0, `admin without errors ${panel.errors.join(' | ')}`);
   console.log('\nsmoke test passed');

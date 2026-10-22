@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1.7
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+# better-sqlite3 has no prebuilt binary for every platform (arm64 included): compile it here, not in the final image
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile

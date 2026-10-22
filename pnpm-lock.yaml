@@ -41,6 +41,12 @@ importers:
       "@biomejs/biome":
         specifier: ^2.6.2
         version: 2.6.2
+      "@fontsource-variable/geist":
+        specifier: ^5.3.0
+        version: 5.3.0
+      "@fontsource-variable/geist-mono":
+        specifier: ^5.3.0
+        version: 5.3.0
       "@tailwindcss/vite":
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
@@ -62,6 +68,9 @@ importers:
       "@vitejs/plugin-react":
         specifier: ^6.1.2
         version: 6.1.2(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
@@ -759,6 +768,14 @@ packages:
     resolution:
       { integrity: sha512-ayxItVgf/1axBvw33lqsA5ns02YMpT1r59G/HCJraRNWWBzvLgN+oiCBPhuzTiN67TvctlCYkG0+40WLKYuusQ== }
 
+  "@fontsource-variable/geist-mono@5.3.0":
+    resolution:
+      { integrity: sha512-vBbuwDEo9AkrqADMXOrlAR3DFcJi4/JxeuU43FoiQERnNwsfXNnvxvReZG02cQKmyk4DZkZdBZX3oTDvy2zBAw== }
+
+  "@fontsource-variable/geist@5.3.0":
+    resolution:
+      { integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA== }
+
   "@jridgewell/gen-mapping@0.3.13":
     resolution:
       { integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA== }
@@ -1288,6 +1305,11 @@ packages:
     resolution:
       { integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg== }
     engines: { node: ">=18" }
+
+  clsx@2.1.1:
+    resolution:
+      { integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA== }
+    engines: { node: ">=6" }
 
   content-disposition@3.0.0:
     resolution:
@@ -2511,6 +2533,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  "@fontsource-variable/geist-mono@5.3.0": {}
+
+  "@fontsource-variable/geist@5.3.0": {}
+
   "@jridgewell/gen-mapping@0.3.13":
     dependencies:
       "@jridgewell/sourcemap-codec": 1.6.0
@@ -2796,6 +2822,8 @@ snapshots:
   buffer-from@1.1.2: {}
 
   chai@6.3.0: {}
+
+  clsx@2.1.1: {}
 
   content-disposition@3.0.0: {}
 

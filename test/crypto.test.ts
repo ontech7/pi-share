@@ -110,3 +110,13 @@ describe('vault', () => {
     expect(new Vault(crypto.randomBytes(32)).readTicket(ticket)).toBeNull();
   });
 });
+
+describe('plain size', () => {
+  it('inverts the encrypted size for every boundary', async () => {
+    const { plainSize } = await import('../src/shared/wire.ts');
+    for (const size of [0, 1, 1023, 1024, 1025, 2048, 65_535, 65_536, 65_537, 10 * 65_536, 5_000_000_123]) {
+      expect(plainSize(encryptedSize(size))).toBe(size);
+      expect(plainSize(encryptedSize(size, 1024), 1024)).toBe(size);
+    }
+  });
+});

@@ -1,0 +1,113 @@
+import { useQuery } from '@tanstack/react-query';
+import clsx from 'clsx';
+import { Check, ChevronRight, File, Folder, HardDrive } from 'lucide-react';
+import type { BrowseEntry } from '../../../shared/api.ts';
+import { formatBytes, formatDate } from '../../lib/format.ts';
+import { useI18n } from '../../lib/i18n-context.tsx';
+import { Spinner } from '../../ui/Spinner.tsx';
+import { api, keys } from '../api.ts';
+
+type Props = {
+  path: string;
+  onNavigate: (path: string) => void;
+  selected: Map<string, BrowseEntry>;
+  onToggle: (entry: BrowseEntry) => void;
+};
+
+export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
+  const { t, lang } = useI18n();
+  const listing = useQuery({
+    queryKey: keys.browse(path),
+    queryFn: () => api.browse(path),
+    placeholderData: (previous) => previous,
+  });
+  const crumbs = path ? path.split('/') : [];
+
+  return (
+    <div className="flex flex-col gap-3">
+      <nav className="flex min-h-9 flex-wrap items-center gap-1 text-sm" aria-label="breadcrumb">
+        <button
+          type="button"
+          onClick={() => onNavigate('')}
+          className="press flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium text-muted hover:bg-surface-2 hover:text-fg"
+        >
+          <HardDrive className="size-4" />
+          {t('create.root')}
+        </button>
+        {crumbs.map((crumb, index) => (
+          <span key={crumbs.slice(0, index + 1).join('/')} className="flex items-center gap-1">
+            <ChevronRight className="size-4 text-muted/60" />
+            <button
+              type="button"
+              onClick={() => onNavigate(crumbs.slice(0, index + 1).join('/'))}
+              className={clsx(
+                'press max-w-48 truncate rounded-lg px-2 py-1 hover:bg-surface-2',
+                index === crumbs.length - 1 ? 'font-semibold text-fg' : 'text-muted hover:text-fg',
+              )}
+            >
+              {crumb}
+            </button>
+          </span>
+        ))}
+        {listing.isFetching && <Spinner className="ml-1 text-muted" />}
+      </nav>
+
+      <div className="overflow-hidden rounded-2xl border border-line">
+        {listing.isError ? (
+          <p className="p-6 text-sm text-danger">{t('common.error')}</p>
+        ) : !listing.data ? (
+          <div className="grid h-48 place-items-center text-muted">
+            <Spinner className="size-5" />
+          </div>
+        ) : listing.data.entries.length === 0 ? (
+          <p className="p-10 text-center text-sm text-muted">{t('create.emptyFolder')}</p>
+        ) : (
+          <ul className="max-h-[46dvh] divide-y divide-line overflow-y-auto overscroll-contain">
+            {listing.data.entries.map((entry) => {
+              const isSelected = selected.has(entry.path);
+              return (
+                <li key={entry.path}>
+                  <button
+                    type="button"
+                    onClick={() => (entry.type === 'dir' ? onNavigate(entry.path) : onToggle(entry))}
+                    aria-pressed={entry.type === 'file' ? isSelected : undefined}
+                    className={clsx(
+                      'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
+                      isSelected ? 'bg-accent/12' : 'hover:bg-surface-2',
+                    )}
+                  >
+                    {entry.type === 'dir' ? (
+                      <Folder className="size-5 shrink-0 text-accent-strong" />
+                    ) : (
+                      <span
+                        className={clsx(
+                          'grid size-5 shrink-0 place-items-center rounded-md border transition-colors',
+                          isSelected ? 'border-transparent bg-accent text-on-accent' : 'border-line',
+                        )}
+                      >
+                        {isSelected ? (
+                          <Check className="size-3.5 animate-pop" strokeWidth={3} />
+                        ) : (
+                          <File className="size-3 text-muted" />
+                        )}
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[15px]">{entry.name}</span>
+                    {entry.type === 'file' ? (
+                      <span className="shrink-0 text-right text-xs text-muted tabular">
+                        {formatBytes(entry.size, lang)}
+                        <span className="hidden sm:inline"> · {formatDate(entry.modifiedAt, lang)}</span>
+                      </span>
+                    ) : (
+                      <ChevronRight className="size-4 shrink-0 text-muted" />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}

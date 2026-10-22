@@ -16,7 +16,8 @@ Self-hosted on a Raspberry Pi or anything that runs Docker. No uploads, no third
 ![Node](https://img.shields.io/badge/node-%E2%89%A522.18-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
-![Docker](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)
+[![Image](https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/ontech7/pi-share/pkgs/container/pi-share)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [How it works](#how-it-works) ·
 [Security](#security-model) · [Configuration](#configuration) · [Changelog](CHANGELOG.md)
@@ -81,12 +82,14 @@ when**.
 
 You need Docker with Compose and a way to reach the edge socket from the internet. The examples use a
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), which needs no
-open port on your router.
+open port on your router. Images for `amd64` and `arm64` (any Raspberry Pi 4 or 5) are published on
+[GitHub's registry](https://github.com/ontech7/pi-share/pkgs/container/pi-share) for every release.
 
 ```sh
-git clone https://github.com/ontech7/pi-share && cd pi-share
-docker build -t pi-share:local .
-cp .env.example .env            # set PUBLIC_URL, STORAGE_PATH, DATA_PATH
+mkdir pi-share && cd pi-share
+curl -fsSLO https://raw.githubusercontent.com/ontech7/pi-share/main/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/ontech7/pi-share/main/.env.example
+nano .env                       # set PUBLIC_URL, STORAGE_PATH, DATA_PATH
 sudo install -d -o 10001 -g 10001 -m 0750 /run/pi-share/broker /run/pi-share/edge /var/lib/pi-share
 docker compose up -d
 docker compose logs admin | grep "setup code"
@@ -105,6 +108,12 @@ docker compose logs admin | grep "setup code"
    ```
 3. `/run` is cleared at boot: add `d /run/pi-share/broker 0750 10001 10001 -` and the same line for `edge` to
    `/etc/tmpfiles.d/pi-share.conf`.
+
+To update, change `PI_SHARE_IMAGE` in `.env` (or keep `:0.3` for every 0.3.x) and run
+`docker compose pull && docker compose up -d`. Each image carries a signed build provenance:
+`gh attestation verify oci://ghcr.io/ontech7/pi-share:0.3.0 --owner ontech7` proves it was built by this
+repository's workflow from the tagged commit. To build it yourself instead, `docker build -t pi-share:local .` in a
+clone and set `PI_SHARE_IMAGE=pi-share:local`.
 
 > [!TIP]
 > The containers run as uid `10001`. If some of your folders are readable only by their owner, run them as that
@@ -195,7 +204,7 @@ Every push runs these checks, and they must pass before anything is merged:
 | **Coverage gate**                | the build fails under 85% statements / 72% branches of `src/server` and `src/shared`                                                                                                                                                                           |
 | **End to end in a real browser** | headless Chrome sets up the admin, creates a link, unlocks it, downloads through the service worker and compares the SHA-256 of the saved file with the original, shares a live folder, saves the settings                                                     |
 | **CodeQL**                       | GitHub's security-extended queries, weekly and on every push                                                                                                                                                                                                   |
-| **Multi-arch image**             | `linux/amd64` and `linux/arm64`                                                                                                                                                                                                                                |
+| **Multi-arch image**             | `linux/amd64` and `linux/arm64`, published with build provenance on every release                                                                                                                                                                              |
 
 ## Configuration
 
@@ -266,4 +275,8 @@ e2e          real-browser smoke test
 ```
 
 Conventions and security invariants for contributors are in [`CLAUDE.md`](CLAUDE.md); releases are listed in the
-[changelog](CHANGELOG.md).
+[changelog](CHANGELOG.md). A `v*` tag on `main` publishes the image and the GitHub release.
+
+## License
+
+[MIT](LICENSE) © ontech7

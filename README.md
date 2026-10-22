@@ -31,10 +31,17 @@ Self-hosted on a Raspberry Pi or anything that runs Docker. No uploads, no third
 
 ## Why
 
-A colleague needs a 45 MB archive, the chat app stops at 20 MB, and the file is confidential, so it should not sit
-in somebody else's bucket. pi-share turns any file or folder on your own disk into a link. Nothing is uploaded
-anywhere: the bytes leave your machine only when the recipient downloads them, encrypted end to end, and you see
-exactly who opened what and when.
+Some files should not travel through somebody else's cloud:
+- **Work files too big for chat.** A contract draft or a client export is over the chat app's size limit, and it is
+  **confidential**: it should not sit in a third-party bucket for weeks after the call.
+- **A whole holiday folder for the family.** Gigabytes of photos and videos straight from your disk, **no
+  compressing, no uploading**, and no account for anyone to create.
+- **Documents for an accountant or a lawyer.** Scans, payslips and tax returns that must arrive intact, **expire
+  after a week** and be downloaded by **one person only**.
+
+pi-share turns any file or folder on your own disk into a link. **Nothing is uploaded**: the bytes leave your
+machine only when the recipient downloads them, **encrypted end to end**, and you see **who opened what, and
+when**.
 
 ## Features
 

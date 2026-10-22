@@ -1,7 +1,11 @@
 .git
+.github
+.claude
+node_modules
+dist
 data
-dev
-test
+e2e
 docs
 *.secret
 *.env
+.env

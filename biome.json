@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
-    "includes": ["**", "!dist", "!drizzle", "!node_modules", "!coverage", "!e2e/.out"]
+    "includes": ["**", "!dist", "!drizzle", "!node_modules", "!coverage", "!e2e/.out", "!pnpm-lock.yaml"]
   },
   "formatter": {
     "indentStyle": "space",

@@ -8,7 +8,8 @@ export const RECORD_SIZE = 64 * 1024;
 export const PBKDF2_ITERATIONS = 600_000;
 
 export type Sealed = { iv: string; ct: string };
-export type FilePart = number | 'all';
+/** 'all' for the whole share as one archive, otherwise the id of one entry. */
+export type FilePart = string;
 
 const encoder = new TextEncoder();
 

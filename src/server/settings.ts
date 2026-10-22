@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { eq, lt } from 'drizzle-orm';
+import { type Preferences, preferencesSchema } from '../shared/api.ts';
 import { hashSecret, sha256, verifySecret } from './crypto.ts';
 import { type Db, schema } from './db/index.ts';
 
@@ -37,6 +38,23 @@ export class Settings {
   updateService(patch: Partial<ServiceSettings>): ServiceSettings {
     const next = { ...this.service(), ...patch };
     this.set('service', next);
+    return next;
+  }
+
+  /** Defaults for new links; a stored value that no longer fits the schema falls back field by field. */
+  preferences(defaults: Preferences): Preferences {
+    const stored = this.get<Record<string, unknown>>('preferences', {});
+    const merged = { ...defaults };
+    for (const key of Object.keys(defaults) as (keyof Preferences)[]) {
+      const field = preferencesSchema.shape[key].safeParse(stored[key]);
+      if (field.success) Object.assign(merged, { [key]: field.data });
+    }
+    return merged;
+  }
+
+  updatePreferences(patch: Partial<Preferences>, defaults: Preferences): Preferences {
+    const next = { ...this.preferences(defaults), ...patch };
+    this.set('preferences', next);
     return next;
   }
 

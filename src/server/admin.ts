@@ -17,6 +17,8 @@ import {
   changePasswordBody,
   createLinkBody,
   loginBody,
+  type Preferences,
+  preferencesBody,
   type ServiceState,
   type SessionState,
   serviceBody,
@@ -97,6 +99,8 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
   app.addHook('onRequest', async (request, reply) => {
     if (!isAllowed(allowed, request.ip)) return reply.code(403).send({ error: 'forbidden_network' });
     const host = (request.headers.host ?? '').replace(/:\d+$/, '').toLowerCase();
+    // The container's own health probe comes from inside, by address: it answers nothing about links.
+    if (request.routeOptions.url === '/healthz') return;
     if (config.adminHosts.length && !config.adminHosts.includes(host))
       return reply.code(421).send({ error: 'wrong_host' });
 
@@ -117,8 +121,10 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
       return reply.code(400).send({ error: 'invalid', issues: error.validation });
     if (error instanceof z.ZodError) return reply.code(400).send({ error: 'invalid', issues: error.issues });
     if (error instanceof ShareError) return reply.code(error.status).send({ error: error.code, ...error.data });
-    if (error instanceof StorageError)
-      return reply.code(error.code === 'not_found' ? 404 : 400).send({ error: error.code });
+    if (error instanceof StorageError) {
+      const status = error.code === 'not_found' ? 404 : error.code === 'unreadable' ? 403 : 400;
+      return reply.code(status).send({ error: error.code });
+    }
     const status = (error as { statusCode?: number }).statusCode;
     if (status && status < 500) return reply.code(status).send({ error: (error as Error).message });
     app.log.error(error);
@@ -142,6 +148,13 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     activeLinks: shares.activeCount(),
     publicUrl: config.publicUrl,
   });
+
+  const defaults: Preferences = {
+    onChange: 'pause',
+    expiryDays: config.defaultExpiryDays,
+    maxDownloads: null,
+    generatePassword: false,
+  };
 
   app.get('/healthz', async () => ({ ok: true }));
 
@@ -209,11 +222,16 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     async (request) => storage.browse(request.query.path),
   );
 
+  app.get('/api/preferences', async () => settings.preferences(defaults));
+  app.patch('/api/preferences', { schema: { body: preferencesBody } }, async (request) =>
+    settings.updatePreferences(request.body, defaults),
+  );
+
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 
   app.get('/api/links', async () => shares.list());
   app.post('/api/links', { schema: { body: createLinkBody } }, async (request, reply) =>
-    reply.code(201).send(await shares.create(request.body)),
+    reply.code(201).send(await shares.create(request.body, settings.preferences(defaults).onChange)),
   );
   app.get('/api/links/:id', { schema: { params: linkParams } }, async (request) => shares.detail(request.params.id));
   app.patch('/api/links/:id', { schema: { params: linkParams, body: updateLinkBody } }, async (request) =>

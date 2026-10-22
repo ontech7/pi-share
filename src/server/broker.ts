@@ -3,12 +3,22 @@ import Fastify, { type FastifyReply } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { ShareMeta } from '../shared/api.ts';
-import type { FilePart } from '../shared/wire.ts';
-import { encryptedSize, encryptStream, randomId, safeEqual, sealMeta, type Vault, verifySecret } from './crypto.ts';
+import type { Entry } from './content.ts';
+import {
+  downloadCounts,
+  encryptedSize,
+  encryptStream,
+  plainDelivered,
+  randomId,
+  safeEqual,
+  sealMeta,
+  type Vault,
+  verifySecret,
+} from './crypto.ts';
 import type { Settings } from './settings.ts';
 import type { ServableLink, Shares, Visit } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
-import { archiveNames, exactFile, zipSize, zipStream } from './zip.ts';
+import { exactFile, zipSize, zipStream } from './zip.ts';
 
 /** The edge passes what it knows about the visitor in this header, as JSON. */
 export const VISIT_HEADER = 'x-visit';
@@ -41,7 +51,7 @@ export type BrokerDeps = {
 
 export function isOnline(shares: Shares, settings: Settings): boolean {
   const service = settings.service();
-  return service.enabled && (!service.autoOff || shares.activeCount() > 0);
+  return service.enabled && (!service.autoOff || shares.openCount() > 0);
 }
 
 /** Every field cut to size instead of rejected, so an oversized header cannot wipe the visitor from the log. */
@@ -69,6 +79,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   const perLink = new Map<string, number>();
   const checkingPassword = new Set<string>();
   const perVisitor = new Map<string, number>();
+  /** Visitors with a download in flight, per link: `${link} ${visitor}` → downloads. */
+  const inFlight = new Map<string, number>();
   const lastPreview = new Map<string, number>();
   let activeLinks = { value: 0, at: 0, revision: -1 };
 
@@ -82,20 +94,22 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     if (secret && !safeEqual(String(request.headers[SECRET_HEADER] ?? ''), secret)) return reply.code(401).send();
   });
 
-  const unavailable = (reply: FastifyReply) => reply.code(404).send({ error: 'unavailable' });
+  const unavailable = (reply: FastifyReply, reason?: string) =>
+    reply.code(404).send(reason ? { error: 'unavailable', reason } : { error: 'unavailable' });
 
-  const metaOf = ({ link, files }: ServableLink): ShareMeta => {
-    const available = files.filter((file) => file.state === 'ok');
-    const names = archiveNames(available.map((file) => file.name));
+  const metaOf = ({ link, content }: ServableLink): ShareMeta => {
+    const { entries } = content;
+    const folders = content.items.filter((report) => report.item.kind === 'folder');
+    const bundled = entries.length > 1 || folders.length > 0;
+    const fallback = folders.length === 1 && content.items.length === 1 ? (folders[0]?.name as string) : 'files';
     return {
-      files: files.map((file) => ({ name: file.name, size: file.size, available: file.state === 'ok' })),
-      bundle:
-        available.length > 1
-          ? {
-              name: `${(link.label || 'files').replace(/[\\/:*?"<>|]+/g, '_')}.zip`,
-              size: zipSize(available.map((file, i) => ({ name: names[i] as string, size: file.size }))),
-            }
-          : null,
+      entries: entries.map(({ id, path, size }) => ({ id, path, size })),
+      bundle: bundled
+        ? {
+            name: `${(link.label || fallback).replace(/[\\/:*?"<>|]+/g, '_')}.zip`,
+            size: zipSize(entries.map((entry) => ({ name: entry.path, size: entry.size }))),
+          }
+        : null,
       expiresAt: link.expiresAt,
     };
   };
@@ -110,16 +124,19 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     }),
   });
 
-  /** The link, if the caller proved to hold its key and it can be served right now. */
+  /**
+   * The link, if the caller proved to hold its key and it can be served right now. Only someone holding
+   * the key learns why a link is not available (paused, expired...); everyone else sees the same 404.
+   */
   const authorize = (id: string, givenProof: string, visit: Visit) => {
     const link = shares.find(id);
-    if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return null;
-    const found = shares.servable(id);
+    if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return { ok: false as const };
+    const found = shares.servable(id, visit.visitor);
     if (!found.ok) {
       shares.record(id, { ...visit, type: 'refused', detail: found.reason });
-      return null;
+      return { ok: false as const, reason: found.reason };
     }
-    return { servable: found.value, visitor: visit.visitor };
+    return { ok: true as const, servable: found.value, visitor: visit.visitor };
   };
 
   const validTicket = (id: string, visit: Visit, header: unknown): boolean => {
@@ -129,13 +146,13 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     return ticket.g === shares.passwordGeneration(link);
   };
 
-  // The switch applies at once; only the count of active links (it stats every shared file) is cached.
+  // The switch applies at once; the count of open links never looks at the disk, so any visitor may ask.
   app.get('/state', async () => {
     const service = settings.service();
     if (!service.enabled) return { online: false };
     if (!service.autoOff) return { online: true };
     if (Date.now() - activeLinks.at > ONLINE_CACHE || activeLinks.revision !== shares.revision) {
-      activeLinks = { value: shares.activeCount(), at: Date.now(), revision: shares.revision };
+      activeLinks = { value: shares.openCount(), at: Date.now(), revision: shares.revision };
     }
     return { online: activeLinks.value > 0 };
   });
@@ -153,7 +170,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   app.post('/links/:id/open', { schema: { params: linkParams, body: z.object({ proof }) } }, async (request, reply) => {
     const visit = visitOf(request.headers);
     const allowed = authorize(request.params.id, request.body.proof, visit);
-    if (!allowed) return unavailable(reply);
+    if (!allowed.ok) return unavailable(reply, allowed.reason);
     shares.record(request.params.id, { ...visit, type: 'open' });
     if (allowed.servable.link.passwordHash) return { passwordRequired: true };
     return grant(allowed.servable, allowed.visitor);
@@ -165,7 +182,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     async (request, reply) => {
       const visit = visitOf(request.headers);
       const allowed = authorize(request.params.id, request.body.proof, visit);
-      if (!allowed) return unavailable(reply);
+      if (!allowed.ok) return unavailable(reply, allowed.reason);
       const { link } = allowed.servable;
       if (!link.passwordHash) return grant(allowed.servable, allowed.visitor);
       if (!request.body.verifier) return reply.code(403).send({ error: 'password_required' });
@@ -190,7 +207,9 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
   app.get(
     '/links/:id/files/:part',
-    { schema: { params: linkParams.extend({ part: z.union([z.literal('all'), z.coerce.number().int().min(0)]) }) } },
+    {
+      schema: { params: linkParams.extend({ part: z.union([z.literal('all'), z.string().regex(/^[0-9a-f]{16}$/)]) }) },
+    },
     async (request, reply) => {
       const { id, part } = request.params;
       const visit = visitOf(request.headers);
@@ -199,17 +218,19 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         return reply.code(403).send({ error: 'ticket' });
       }
 
-      const found = shares.servable(id);
+      const found = shares.servable(id, visitor);
       if (!found.ok) {
         shares.record(id, { ...visit, type: 'refused', detail: found.reason });
-        return unavailable(reply);
+        // The ticket already proves the key: tell why, so retries are not counted as guesses.
+        return unavailable(reply, found.reason);
       }
-      const file = part === 'all' ? null : part;
-      const available = found.value.files.filter((entry) => entry.state === 'ok');
-      const selected = part === 'all' ? available : available.filter((entry) => entry.position === part);
-      if (selected.length === 0 || (part === 'all' && selected.length < 2)) {
-        shares.record(id, { ...visit, type: 'refused', file, detail: 'file_unavailable' });
-        return unavailable(reply);
+      const { entries } = found.value.content;
+      const selected = part === 'all' ? entries : entries.filter((entry) => entry.id === part);
+      const single = part === 'all' ? null : (selected[0] ?? null);
+      const target = { file: single?.position ?? null, path: single?.path ?? null };
+      if (selected.length === 0) {
+        shares.record(id, { ...visit, ...target, type: 'refused', detail: 'file_unavailable' });
+        return unavailable(reply, 'unavailable');
       }
 
       const total = [...perLink.values()].reduce((sum, n) => sum + n, 0);
@@ -220,34 +241,47 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       ) {
         return reply.code(429).send({ error: 'busy' });
       }
+      // Someone new downloading holds a place in the limit until they finish, so parallel newcomers cannot
+      // go past it. People who already got the files never need a place.
+      const { maxDownloads } = found.value.link;
+      if (maxDownloads && !shares.isRecipient(id, visitor)) {
+        const newcomers = [...inFlight.keys()]
+          .filter((key) => key.startsWith(`${id} `))
+          .map((key) => key.slice(id.length + 1))
+          .filter((other) => other !== visitor && !shares.isRecipient(id, other));
+        if (found.value.counts.recipients + newcomers.length >= maxDownloads) {
+          return reply.code(429).send({ error: 'busy' });
+        }
+      }
 
       const abort = new AbortController();
-      const names = archiveNames(selected.map((entry) => entry.name));
+      const opener = (entry: Entry) => () =>
+        storage.open({ path: entry.source, size: entry.size, modifiedAt: entry.modifiedAt });
       let plainSize: number;
       let source: Readable;
       try {
-        if (part === 'all') {
-          const entries = selected.map((entry, i) => ({
-            name: names[i] as string,
+        if (single) {
+          plainSize = single.size;
+          source = exactFile(opener(single)(), single.size, abort.signal);
+        } else {
+          const archive = selected.map((entry) => ({
+            name: entry.path,
             size: entry.size,
             modifiedAt: entry.modifiedAt,
-            open: () => storage.open(entry),
+            open: opener(entry),
           }));
-          plainSize = zipSize(entries);
-          source = zipStream(entries, abort.signal);
-        } else {
-          const entry = selected[0] as (typeof selected)[number];
-          plainSize = entry.size;
-          source = exactFile(storage.open(entry), entry.size, abort.signal);
+          plainSize = zipSize(archive);
+          source = zipStream(archive, abort.signal);
         }
       } catch (error) {
         if (!(error instanceof StorageError)) throw error;
-        shares.record(id, { ...visit, type: 'refused', file, detail: `file_${error.code}` });
-        return unavailable(reply);
+        shares.record(id, { ...visit, ...target, type: 'refused', detail: `file_${error.code}` });
+        return unavailable(reply, 'unavailable');
       }
 
       const downloadId = randomId(9);
       let sent = 0;
+      let delivered = 0;
       let settled = false;
       let sentAtLastCheck = -1;
 
@@ -257,7 +291,17 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         clearInterval(watchdog);
         adjust(perLink, id, -1);
         adjust(perVisitor, visitor, -1);
-        shares.record(id, { ...visit, type, file, downloadId, bytes: sent, detail });
+        adjust(inFlight, `${id} ${visitor}`, -1);
+        const finished = type === 'download_finished';
+        shares.record(id, {
+          ...visit,
+          ...target,
+          type,
+          downloadId,
+          bytes: finished ? sent : plainDelivered(delivered, plainSize),
+          detail,
+          counted: finished || downloadCounts(delivered, plainSize),
+        });
       };
 
       // A client that stops reading would otherwise hold a download slot forever.
@@ -272,12 +316,16 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
       adjust(perLink, id, 1);
       adjust(perVisitor, visitor, 1);
-      shares.record(id, { ...visit, type: 'download_started', file, downloadId, bytes: plainSize });
+      adjust(inFlight, `${id} ${visitor}`, 1);
+      shares.record(id, { ...visit, ...target, type: 'download_started', downloadId, bytes: plainSize });
       source.on('data', (chunk: Buffer) => {
         sent += chunk.length;
       });
-      const encrypted = pipeline(source, encryptStream(found.value.key, id, part as FilePart), (error) => {
+      const encrypted = pipeline(source, encryptStream(found.value.key, id, part), (error) => {
         if (error) settle('download_aborted', error.message);
+      });
+      encrypted.on('data', (chunk: Buffer) => {
+        delivered += chunk.length;
       });
       encrypted.on('end', () => settle(sent === plainSize ? 'download_finished' : 'download_aborted'));
       reply.raw.on('close', () => {
@@ -314,7 +362,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       shares.record(id, {
         ...visit,
         type: request.body.ok ? 'download_verified' : 'download_failed',
-        file: shares.downloadFile(id, downloadId),
+        ...shares.downloadTarget(id, downloadId),
         downloadId,
         detail: request.body.reason,
       });

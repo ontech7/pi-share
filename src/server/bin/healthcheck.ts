@@ -1,6 +1,8 @@
 import { Agent, request } from 'undici';
 
 const address = process.argv[2] ?? '';
+// The edge answers 404 to anything that is not a link, on purpose: that is its healthy answer.
+const expected = Number(process.argv[3] ?? 200);
 const unix = address.startsWith('unix:');
 
 try {
@@ -10,7 +12,7 @@ try {
     bodyTimeout: 3000,
   });
   await response.body.dump();
-  process.exit(response.statusCode < 500 ? 0 : 1);
+  process.exit(response.statusCode === expected ? 0 : 1);
 } catch {
   process.exit(1);
 }

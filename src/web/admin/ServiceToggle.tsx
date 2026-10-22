@@ -5,11 +5,10 @@ import { useI18n } from '../lib/i18n-context.tsx';
 import { Switch } from '../ui/Switch.tsx';
 import { api, keys } from './api.ts';
 
-export function ServiceToggle() {
-  const { t } = useI18n();
+/** The service state and an optimistic switch for it, shared by the header and the settings. */
+export function useService() {
   const queryClient = useQueryClient();
   const service = useQuery({ queryKey: keys.service, queryFn: api.service, refetchInterval: 10_000 });
-
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.updateService({ enabled }),
     onMutate: async (enabled) => {
@@ -21,7 +20,12 @@ export function ServiceToggle() {
     onError: (_error, _enabled, context) => queryClient.setQueryData(keys.service, context?.previous),
     onSuccess: (state) => queryClient.setQueryData(keys.service, state),
   });
+  return { service, toggle };
+}
 
+export function ServiceToggle() {
+  const { t } = useI18n();
+  const { service, toggle } = useService();
   const state = service.data;
   if (!state) return <div className="h-10 w-36 rounded-full bg-surface-2" />;
 

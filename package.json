@@ -1,6 +1,6 @@
 {
   "name": "pi-share",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted, end-to-end encrypted share links for files already on your disk. Built for a Raspberry Pi.",
   "private": true,
   "type": "module",

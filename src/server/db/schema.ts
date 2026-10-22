@@ -1,5 +1,5 @@
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { eventTypes } from '../../shared/api.ts';
+import { changePolicies, eventTypes, itemKinds } from '../../shared/api.ts';
 
 export const links = sqliteTable('links', {
   id: text().primaryKey(),
@@ -12,6 +12,7 @@ export const links = sqliteTable('links', {
   active: integer({ mode: 'boolean' }).notNull().default(true),
   lockedAt: integer('locked_at'),
   failedPasswords: integer('failed_passwords').notNull().default(0),
+  onChange: text('on_change', { enum: changePolicies }).notNull().default('pause'),
 });
 
 export const linkFiles = sqliteTable(
@@ -21,12 +22,28 @@ export const linkFiles = sqliteTable(
       .notNull()
       .references(() => links.id, { onDelete: 'cascade' }),
     position: integer().notNull(),
+    kind: text({ enum: itemKinds }).notNull().default('file'),
     path: text().notNull(),
     name: text().notNull(),
     size: integer().notNull(),
     modifiedAt: integer('modified_at').notNull(),
   },
   (table) => [primaryKey({ columns: [table.linkId, table.position] })],
+);
+
+/** What a shared folder contained when the link was created or its changes were last accepted. */
+export const folderSnapshots = sqliteTable(
+  'folder_snapshots',
+  {
+    linkId: text('link_id')
+      .notNull()
+      .references(() => links.id, { onDelete: 'cascade' }),
+    position: integer().notNull(),
+    relative: text().notNull(),
+    size: integer().notNull(),
+    modifiedAt: integer('modified_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.linkId, table.position, table.relative] })],
 );
 
 export const events = sqliteTable(
@@ -39,6 +56,7 @@ export const events = sqliteTable(
     at: integer().notNull(),
     type: text({ enum: eventTypes }).notNull(),
     file: integer(),
+    path: text(),
     downloadId: text('download_id'),
     ip: text(),
     country: text(),
@@ -47,6 +65,8 @@ export const events = sqliteTable(
     visitor: text(),
     bytes: integer(),
     detail: text(),
+    /** Set on the event that ends a download when that download uses up the quota. */
+    counted: integer({ mode: 'boolean' }).notNull().default(false),
   },
   (table) => [index('events_link_at').on(table.linkId, table.at)],
 );

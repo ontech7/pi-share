@@ -1,8 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, FileText, Lock, LockOpen, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  CirclePause,
+  FileText,
+  Folder,
+  Lock,
+  LockOpen,
+  Pencil,
+  RefreshCw,
+  Trash2,
+  Users,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import type { LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
+import type { ChangeView, LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
 import { formatBytes, formatDate } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Button } from '../../ui/Button.tsx';
@@ -11,7 +22,7 @@ import { CopyButton } from '../../ui/CopyButton.tsx';
 import { Spinner } from '../../ui/Spinner.tsx';
 import { Switch } from '../../ui/Switch.tsx';
 import { useToast } from '../../ui/Toaster.tsx';
-import { api, keys } from '../api.ts';
+import { ApiError, api, keys } from '../api.ts';
 import { ActivityList } from '../detail/ActivityList.tsx';
 import { EditLinkDialog } from '../detail/EditLinkDialog.tsx';
 import { FileStateBadge, LinkStateBadge } from '../status.tsx';
@@ -32,6 +43,27 @@ export function LinkScreen({ id }: { id: string }) {
       queryClient.invalidateQueries({ queryKey: keys.service });
     },
     onError: () => notify(t('common.error'), 'error'),
+  });
+  const accept = useMutation({
+    mutationFn: ({ version, confirmSensitive }: { version: string; confirmSensitive?: boolean }) =>
+      api.updateLink(id, { acceptChanges: version, confirmSensitive }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(keys.link(id), updated);
+      queryClient.invalidateQueries({ queryKey: keys.links });
+      queryClient.invalidateQueries({ queryKey: keys.service });
+    },
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.code === 'sensitive') {
+        const files = (error.data.files as string[]).join('\n');
+        if (window.confirm(t('detail.acceptSensitive', { files }))) {
+          accept.mutate({ ...variables, confirmSensitive: true });
+        }
+        return;
+      }
+      if (error instanceof ApiError && error.code === 'changes_moved') notify(t('detail.changesMoved'), 'error');
+      else notify(t('common.error'), 'error');
+      queryClient.invalidateQueries({ queryKey: keys.link(id) });
+    },
   });
   const remove = useMutation({
     mutationFn: () => api.deleteLink(id),
@@ -60,8 +92,8 @@ export function LinkScreen({ id }: { id: string }) {
   }
 
   const data: LinkDetail = link.data;
-  const changed = data.files.some((file) => file.state === 'changed');
-  const downloads = data.maxDownloads ? `${data.counts.started} / ${data.maxDownloads}` : String(data.counts.downloads);
+  const changed = data.changes.length > 0;
+  const downloads = String(data.counts.downloads);
 
   return (
     <div className="flex animate-enter flex-col gap-8">
@@ -81,6 +113,16 @@ export function LinkScreen({ id }: { id: string }) {
               </span>
               <span>
                 {t('detail.expires')} {data.expiresAt ? formatDate(data.expiresAt, lang) : t('common.never')}
+              </span>
+              {data.maxDownloads && (
+                <span className="flex items-center gap-1 tabular">
+                  <Users className="size-3.5" />
+                  {t('detail.limitUsed', { n: data.counts.recipients, max: data.maxDownloads })}
+                </span>
+              )}
+              <span className="flex items-center gap-1">
+                {data.onChange === 'pause' ? <CirclePause className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+                {data.onChange === 'pause' ? t('create.onChangePause') : t('create.onChangeFollow')}
               </span>
               <span className="flex items-center gap-1">
                 {data.hasPassword ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
@@ -142,27 +184,40 @@ export function LinkScreen({ id }: { id: string }) {
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold tracking-tight">{t('detail.files')}</h2>
         {changed && (
-          <Card className="flex flex-wrap items-center justify-between gap-3 border-warn/40 p-4">
-            <p className="max-w-xl text-sm">{t('actions.acceptChangesHint')}</p>
-            <Button
-              icon={<RefreshCw className="size-4" />}
-              onClick={() => update.mutate({ acceptChanges: true })}
-              loading={update.isPending}
-            >
-              {t('actions.acceptChanges')}
-            </Button>
+          <Card className={`flex flex-col gap-4 p-4 ${data.onChange === 'pause' ? 'border-warn/40' : 'border-line'}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="max-w-xl text-sm">
+                {data.onChange === 'pause' ? t('actions.acceptChangesHint') : t('actions.acceptChangesFollow')}
+              </p>
+              <Button
+                icon={<RefreshCw className="size-4" />}
+                onClick={() => accept.mutate({ version: data.version })}
+                loading={accept.isPending}
+              >
+                {t('actions.acceptChanges')}
+              </Button>
+            </div>
+            <ChangeList changes={data.changes} />
           </Card>
         )}
         <Card className="divide-y divide-line">
-          {data.files.map((file) => (
-            <div key={file.position} className="flex items-center gap-3 px-4 py-3">
-              <FileText className="size-5 shrink-0 text-muted" />
+          {data.items.map((item) => (
+            <div key={item.position} className="flex items-center gap-3 px-4 py-3">
+              {item.kind === 'folder' ? (
+                <Folder className="size-5 shrink-0 text-accent-strong" />
+              ) : (
+                <FileText className="size-5 shrink-0 text-muted" />
+              )}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[15px] font-medium">{file.name}</p>
-                <p className="truncate font-mono text-xs text-muted">{file.path}</p>
+                <p className="truncate text-[15px] font-medium">{item.name}</p>
+                <p className="truncate font-mono text-xs text-muted">{item.path}</p>
               </div>
-              <span className="hidden text-sm text-muted tabular sm:block">{formatBytes(file.size, lang)}</span>
-              <FileStateBadge state={file.state} />
+              <span className="hidden shrink-0 text-right text-sm text-muted tabular sm:block">
+                {item.kind === 'folder' && `${t('share.files', { n: item.fileCount })} · `}
+                {formatBytes(item.size, lang)}
+              </span>
+              {item.changes && item.state === 'changed' && <ChangeCounts {...item.changes} />}
+              <FileStateBadge state={item.state} />
             </div>
           ))}
         </Card>
@@ -170,7 +225,7 @@ export function LinkScreen({ id }: { id: string }) {
 
       <section className="flex flex-col gap-4">
         <h2 className="text-lg font-semibold tracking-tight">{t('detail.activity')}</h2>
-        <ActivityList events={data.events} files={data.files} />
+        <ActivityList events={data.events} items={data.items} />
       </section>
 
       <div className="border-t border-line pt-6">
@@ -224,5 +279,48 @@ function Tile({
         {value}
       </dd>
     </Card>
+  );
+}
+
+const VISIBLE_CHANGES = 8;
+
+function ChangeList({ changes }: { changes: ChangeView[] }) {
+  const { t } = useI18n();
+  const [all, setAll] = useState(false);
+  const shown = all ? changes : changes.slice(0, VISIBLE_CHANGES);
+  const tone = { added: 'text-ok', removed: 'text-danger', changed: 'text-warn' } as const;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{t('detail.changes')}</h3>
+      <ul className="flex flex-col gap-1 font-mono text-xs">
+        {shown.map((change) => (
+          <li key={`${change.change}:${change.path}`} className="flex min-w-0 gap-2">
+            <span className={`w-20 shrink-0 ${tone[change.change]}`}>{t(`change.${change.change}`)}</span>
+            <span className="truncate text-muted" title={change.path}>
+              {change.path}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {!all && changes.length > VISIBLE_CHANGES && (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          className="press self-start rounded-md text-xs font-medium text-accent-strong hover:underline"
+        >
+          {t('detail.moreChanges', { n: changes.length - VISIBLE_CHANGES })}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ChangeCounts({ added, removed, changed }: { added: number; removed: number; changed: number }) {
+  return (
+    <span className="hidden shrink-0 gap-1.5 font-mono text-xs tabular sm:flex">
+      {added > 0 && <span className="text-ok">+{added}</span>}
+      {removed > 0 && <span className="text-danger">−{removed}</span>}
+      {changed > 0 && <span className="text-warn">~{changed}</span>}
+    </span>
   );
 }

@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
+  downloadCounts,
   encryptedSize,
   encryptStream,
   hashSecret,
   keyProof,
   passwordVerifier,
+  plainDelivered,
   sealMeta,
   Vault,
   verifySecret,
@@ -31,14 +33,14 @@ function chunked(buffer: Buffer): Buffer[] {
   return parts;
 }
 
-async function encrypt(plain: Buffer, record?: number, part: number | 'all' = 0): Promise<Buffer> {
+async function encrypt(plain: Buffer, record?: number, part = 'abc'): Promise<Buffer> {
   const out: Buffer[] = [];
   for await (const chunk of Readable.from(chunked(plain)).pipe(encryptStream(key, 'link', part, record)))
     out.push(chunk);
   return Buffer.concat(out);
 }
 
-async function decrypt(wire: Buffer, part: number | 'all' = 0): Promise<Buffer> {
+async function decrypt(wire: Buffer, part = 'abc'): Promise<Buffer> {
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of chunked(wire)) controller.enqueue(new Uint8Array(chunk));
@@ -69,7 +71,7 @@ describe('stream encryption', () => {
     await expect(decrypt(flipped)).rejects.toThrow('integrity');
     await expect(decrypt(wire.subarray(0, 24 + 4 * (1024 + 16)))).rejects.toThrow('integrity');
     await expect(decrypt(wire.subarray(0, 10))).rejects.toThrow('truncated');
-    await expect(decrypt(wire, 1)).rejects.toThrow('integrity');
+    await expect(decrypt(wire, 'other')).rejects.toThrow('integrity');
   });
 
   it('uses a fresh salt for every download', async () => {
@@ -80,8 +82,8 @@ describe('stream encryption', () => {
 
 describe('metadata and passwords', () => {
   it('opens metadata only with the right key and link id', async () => {
-    const sealed = sealMeta(key, 'abc', { files: [{ name: 'è.zip', size: 3 }] });
-    expect(await openMeta(browserKey, 'abc', sealed)).toEqual({ files: [{ name: 'è.zip', size: 3 }] });
+    const sealed = sealMeta(key, 'abc', { entries: [{ id: 'x', path: 'è.zip', size: 3 }] });
+    expect(await openMeta(browserKey, 'abc', sealed)).toEqual({ entries: [{ id: 'x', path: 'è.zip', size: 3 }] });
     await expect(openMeta(browserKey, 'abd', sealed)).rejects.toThrow();
     await expect(openMeta(new Uint8Array(crypto.randomBytes(32)), 'abc', sealed)).rejects.toThrow();
   });
@@ -133,5 +135,32 @@ describe('plain size', () => {
       expect(plainSize(encryptedSize(size))).toBe(size);
       expect(plainSize(encryptedSize(size, 1024), 1024)).toBe(size);
     }
+  });
+});
+
+describe('download quota', () => {
+  const R = 1024;
+  const size = 10 * R + 300;
+  const total = encryptedSize(size, R);
+  const upTo = (records: number) => 24 + records * (R + 16);
+
+  it('knows how much plaintext whole records hold', () => {
+    expect(plainDelivered(0, size, R)).toBe(0);
+    expect(plainDelivered(upTo(1) - 1, size, R)).toBe(0);
+    expect(plainDelivered(upTo(3), size, R)).toBe(3 * R);
+    expect(plainDelivered(total, size, R)).toBe(size);
+  });
+
+  it('counts a download once all but the last record arrived, never earlier', () => {
+    expect(downloadCounts(upTo(9), size, R)).toBe(false);
+    expect(downloadCounts(upTo(10), size, R)).toBe(true);
+    expect(downloadCounts(total, size, R)).toBe(true);
+  });
+
+  it('counts a one-record file only when it is complete', () => {
+    expect(downloadCounts(encryptedSize(300, R) - 1, 300, R)).toBe(false);
+    expect(downloadCounts(encryptedSize(300, R), 300, R)).toBe(true);
+    expect(downloadCounts(encryptedSize(0, R), 0, R)).toBe(true);
+    expect(downloadCounts(10, 0, R)).toBe(false);
   });
 });

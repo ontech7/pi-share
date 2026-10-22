@@ -1,9 +1,9 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowLeft, ArrowRight, Dices, Link2, ShieldAlert, X } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowLeft, ArrowRight, Dices, Folder, Link2, ShieldAlert, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
-import type { BrowseEntry, LinkDetail } from '../../../shared/api.ts';
+import type { BrowseEntry, ChangePolicy, LinkDetail, Preferences } from '../../../shared/api.ts';
 import { formatBytes } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Button } from '../../ui/Button.tsx';
@@ -12,9 +12,10 @@ import { Dialog } from '../../ui/Dialog.tsx';
 import { Field } from '../../ui/Field.tsx';
 import { ApiError, api, keys } from '../api.ts';
 import { FilePicker } from './FilePicker.tsx';
+import { PolicyPicker } from './PolicyPicker.tsx';
 import { generatePassword } from './password.ts';
 
-const EXPIRY_PRESETS = [
+export const EXPIRY_PRESETS = [
   { days: 1, key: 'create.expiry1' },
   { days: 7, key: 'create.expiry7' },
   { days: 30, key: 'create.expiry30' },
@@ -35,15 +36,27 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
   const [expiryDays, setExpiryDays] = useState(7);
   const [maxDownloads, setMaxDownloads] = useState('');
   const [sensitive, setSensitive] = useState<string[] | null>(null);
+  const [onChange, setOnChange] = useState<ChangePolicy>('pause');
   const [created, setCreated] = useState<LinkDetail | null>(null);
+  const preferences = useQuery({ queryKey: keys.preferences, queryFn: api.preferences, enabled: open });
+
+  const applyPreferences = (defaults: Preferences) => {
+    setPassword(defaults.generatePassword ? generatePassword() : '');
+    setExpiryDays(defaults.expiryDays);
+    setMaxDownloads(defaults.maxDownloads ? String(defaults.maxDownloads) : '');
+    setOnChange(defaults.onChange);
+  };
+
+  // Every new link starts from the saved preferences; reopening the dialog starts over.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when the dialog opens or the preferences arrive
+  useEffect(() => {
+    if (open && preferences.data) applyPreferences(preferences.data);
+  }, [open, preferences.data]);
 
   const reset = () => {
     setStep('files');
     setSelected(new Map());
     setLabel('');
-    setPassword('');
-    setExpiryDays(7);
-    setMaxDownloads('');
     setSensitive(null);
     setCreated(null);
   };
@@ -56,11 +69,12 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
   const create = useMutation({
     mutationFn: (confirmSensitive: boolean) =>
       api.createLink({
-        files: [...selected.keys()],
+        paths: [...selected.keys()],
         label,
         password: password || undefined,
         expiresAt: expiryDays ? Date.now() + expiryDays * 86_400_000 : null,
         maxDownloads: maxDownloads ? Number(maxDownloads) : null,
+        onChange,
         confirmSensitive,
       }),
     onSuccess: (link) => {
@@ -83,6 +97,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
     });
 
   const totalSize = [...selected.values()].reduce((sum, entry) => sum + entry.size, 0);
+  const hasFolders = [...selected.values()].some((entry) => entry.type === 'dir');
   const steps: Step[] = ['files', 'options', 'done'];
 
   const footer =
@@ -164,8 +179,8 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
           {selected.size > 0 && (
             <div className="animate-enter flex flex-col gap-2">
               <p className="text-sm text-muted tabular">
-                {selected.size === 1 ? t('create.selectedOne') : t('create.selected', { n: selected.size })} ·{' '}
-                {formatBytes(totalSize, lang)}
+                {selected.size === 1 ? t('create.selectedOne') : t('create.selected', { n: selected.size })}
+                {!hasFolders && ` · ${formatBytes(totalSize, lang)}`}
               </p>
               <ul className="flex flex-wrap gap-2">
                 {[...selected.values()].map((entry) => (
@@ -176,6 +191,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
                       title={entry.path}
                       className="press flex max-w-64 items-center gap-1.5 rounded-full bg-surface-2 py-1 pr-2 pl-3 text-sm hover:bg-line"
                     >
+                      {entry.type === 'dir' && <Folder className="size-3.5 shrink-0 text-accent-strong" />}
                       <span className="truncate">{entry.name}</span>
                       <X className="size-3.5 shrink-0 text-muted" />
                     </button>
@@ -217,22 +233,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
           />
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1.5 text-sm font-medium">{t('create.expiry')}</legend>
-            <div className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1">
-              {EXPIRY_PRESETS.map((preset) => (
-                <button
-                  key={preset.days}
-                  type="button"
-                  aria-pressed={expiryDays === preset.days}
-                  onClick={() => setExpiryDays(preset.days)}
-                  className={clsx(
-                    'press h-9 rounded-lg text-sm font-medium transition-colors',
-                    expiryDays === preset.days ? 'bg-surface text-fg shadow-card' : 'text-muted hover:text-fg',
-                  )}
-                >
-                  {t(preset.key)}
-                </button>
-              ))}
-            </div>
+            <ExpiryPicker value={expiryDays} onChange={setExpiryDays} />
           </fieldset>
           <Field
             label={t('create.maxDownloads')}
@@ -245,6 +246,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
             value={maxDownloads}
             onChange={(event) => setMaxDownloads(event.target.value.replace(/\D/g, ''))}
           />
+          <PolicyPicker value={onChange} onChange={setOnChange} />
           {create.isError && !sensitive && (
             <p className="text-sm text-danger" role="alert">
               {t('common.error')}
@@ -301,5 +303,27 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
         </div>
       )}
     </Dialog>
+  );
+}
+
+export function ExpiryPicker({ value, onChange }: { value: number; onChange: (days: number) => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1">
+      {EXPIRY_PRESETS.map((preset) => (
+        <button
+          key={preset.days}
+          type="button"
+          aria-pressed={value === preset.days}
+          onClick={() => onChange(preset.days)}
+          className={clsx(
+            'press h-9 rounded-lg text-sm font-medium transition-colors',
+            value === preset.days ? 'bg-surface text-fg shadow-card' : 'text-muted hover:text-fg',
+          )}
+        >
+          {t(preset.key)}
+        </button>
+      ))}
+    </div>
   );
 }

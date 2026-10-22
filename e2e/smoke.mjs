@@ -278,6 +278,56 @@ try {
   const counts = await panel.eval(`[...document.querySelectorAll('dl dd')].map((d) => d.textContent)`);
   assert(JSON.stringify(counts) === JSON.stringify(['1', '2', '2', '1', '1']), `counters ${counts.join(', ')}`);
   await panel.shot('07-activity');
+
+  console.log('live folder');
+  await panel.go(`${ADMIN}/`);
+  await panel.click('New link');
+  await panel.text('Work');
+  await panel.eval(`document.querySelector('[aria-label="Folder Work"]').click()`);
+  await panel.text('1 selected');
+  await panel.shot('08-folder-picker');
+  await panel.click('Continue');
+  await panel.click('Follow the changes');
+  await panel.click('Create link');
+  await panel.text('Link ready');
+  const folderUrl = await panel.eval(
+    `[...document.querySelectorAll('dialog p')].map((p) => p.textContent).find((t) => t.includes('/d/'))`,
+  );
+  await panel.click('Close');
+  fs.writeFileSync(path.join(storage, 'Work/later.txt'), 'added after the link');
+  await sleep(3_500); // folder listings are cached for a few seconds
+
+  const folderContext = await send('Target.createBrowserContext');
+  await send('Browser.setDownloadBehavior', {
+    behavior: 'allow',
+    downloadPath: downloads,
+    browserContextId: folderContext.browserContextId,
+  });
+  const folder = await openPage(folderUrl, folderContext.browserContextId);
+  await folder.text('Files shared with you', 20_000);
+  await folder.text('later.txt');
+  assert(await folder.eval(`document.body.innerText.includes('project.zip')`), 'folder opens on its files');
+  await folder.shot('08-folder');
+  await folder.shot('08-folder-mobile', { width: 390, height: 844, mobile: true });
+  await until(() => folder.eval(`!!navigator.serviceWorker.controller`), 'service worker control');
+  await folder.click('Download all');
+  await folder.text('Downloaded and verified', 60_000);
+  await until(() => fs.existsSync(path.join(downloads, 'Work.zip')), 'folder zip on disk');
+  assert(folder.errors.length === 0, `folder page without errors ${folder.errors.join(' | ')}`);
+
+  console.log('settings');
+  await panel.go(`${ADMIN}/settings`);
+  await panel.text('Public page on');
+  await panel.shot('09-settings-mobile', { width: 390, height: 844, mobile: true });
+  await panel.click('New links');
+  await panel.text('Where every new link starts from');
+  await panel.click('Follow the changes');
+  await panel.text('Saved');
+  await panel.shot('10-settings');
+  await panel.shot('10-settings-mobile', { width: 390, height: 844, mobile: true });
+  const saved = await panel.eval(`fetch('/api/preferences').then((r) => r.json())`);
+  assert(saved.onChange === 'follow', 'settings page saves the defaults for new links');
+
   assert(panel.errors.length === 0, `admin without errors ${panel.errors.join(' | ')}`);
   console.log('\nsmoke test passed');
 } catch (error) {

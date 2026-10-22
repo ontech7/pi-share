@@ -81,6 +81,22 @@ export function encryptedSize(plainSize: number, recordSize = RECORD_SIZE): numb
   return HEADER_SIZE + plainSize + records * TAG_SIZE;
 }
 
+/** Plaintext a recipient can decrypt from the first `delivered` bytes of a stream: whole records only. */
+export function plainDelivered(delivered: number, plainSize: number, recordSize = RECORD_SIZE): number {
+  if (delivered >= encryptedSize(plainSize, recordSize)) return plainSize;
+  const records = Math.floor(Math.max(0, delivered - HEADER_SIZE) / (recordSize + TAG_SIZE));
+  return Math.min(plainSize, records * recordSize);
+}
+
+/**
+ * Whether a download uses up the link's quota: once it is complete, or once the recipient holds everything but
+ * the last record. Every download starts from the first byte, so stopping earlier never yields the end of a file.
+ */
+export function downloadCounts(delivered: number, plainSize: number, recordSize = RECORD_SIZE): boolean {
+  if (delivered >= encryptedSize(plainSize, recordSize)) return true;
+  return plainDelivered(delivered, plainSize, recordSize) >= Math.max(1, plainSize - recordSize);
+}
+
 const pbkdf2 = promisify(crypto.pbkdf2);
 const scrypt = promisify(crypto.scrypt) as (
   password: crypto.BinaryLike,

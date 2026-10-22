@@ -59,7 +59,7 @@ export function archiveNames(names: string[]): string[] {
   return names.map((name) => {
     let candidate = name;
     const dot = name.lastIndexOf('.');
-    const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+    const [stem, ext] = dot > name.lastIndexOf('/') + 1 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
     for (let i = 2; used.has(candidate.toLowerCase()); i++) candidate = `${stem} (${i})${ext}`;
     used.add(candidate.toLowerCase());
     return candidate;

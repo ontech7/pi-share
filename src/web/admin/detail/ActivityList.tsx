@@ -14,7 +14,7 @@ import {
   ShieldX,
   Unplug,
 } from 'lucide-react';
-import type { EventType, EventView, LinkFileView } from '../../../shared/api.ts';
+import type { EventType, EventView, LinkItemView } from '../../../shared/api.ts';
 import { countryFlag, formatBytes, formatDateTime } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { parseAgent } from '../../lib/ua.ts';
@@ -33,7 +33,7 @@ const ICONS: Record<EventType, { icon: LucideIcon; tone: string }> = {
   refused: { icon: Ban, tone: 'text-warn' },
 };
 
-export function ActivityList({ events, files }: { events: EventView[]; files: LinkFileView[] }) {
+export function ActivityList({ events, items }: { events: EventView[]; items: LinkItemView[] }) {
   const { t, lang } = useI18n();
 
   if (events.length === 0) {
@@ -50,7 +50,13 @@ export function ActivityList({ events, files }: { events: EventView[]; files: Li
         const { icon: Icon, tone } = ICONS[event.type] ?? { icon: CircleX, tone: 'text-muted' };
         const agent = parseAgent(event.userAgent);
         const isDownload = event.type.startsWith('download_');
-        const fileName = event.file === null ? (isDownload ? t('detail.bundle') : null) : files[event.file]?.name;
+        const fileName =
+          event.path ??
+          (event.file === null
+            ? isDownload
+              ? t('detail.bundle')
+              : null
+            : items.find((item) => item.position === event.file)?.name);
         const language = event.language?.split(',')[0];
         return (
           <li key={event.id} className="group relative flex gap-3 pb-5 last:pb-0">

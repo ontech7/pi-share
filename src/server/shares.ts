@@ -1,26 +1,31 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
 import type {
+  ChangePolicy,
   CreateLinkBody,
   EventType,
   EventView,
   LinkCounts,
   LinkDetail,
-  LinkFileView,
   LinkState,
   LinkSummary,
   UpdateLinkBody,
 } from '../shared/api.ts';
 import { createLinkBody, updateLinkBody } from '../shared/api.ts';
+import { type ContentDeps, folderSnapshot, type Inspection, type Item, inspect, type Snapshot } from './content.ts';
 import { hashSecret, keyProof, passwordVerifier, randomId, safeEqual, sha256, type Vault } from './crypto.ts';
 import { type Db, schema } from './db/index.ts';
 import type { SensitiveList } from './sensitive.ts';
-import { type Storage, StorageError, type StoredFile } from './storage.ts';
+import { type FolderFile, MAX_LINK_FILES, type Storage, StorageError } from './storage.ts';
 
-const { links, linkFiles, events } = schema;
+const { links, linkFiles, folderSnapshots, events } = schema;
 
 type LinkRow = typeof links.$inferSelect;
-type FileRow = typeof linkFiles.$inferSelect;
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+type NewItem = Omit<Item, 'position'> & { files: FolderFile[] | null };
+
+const SNAPSHOT_CHUNK = 1_000;
+const MAX_CHANGES = 1_000;
 
 export class ShareError extends Error {
   readonly status: number;
@@ -46,14 +51,24 @@ export type Visit = {
 export type NewEvent = Visit & {
   type: EventType;
   file?: number | null;
+  path?: string | null;
   downloadId?: string | null;
   bytes?: number | null;
   detail?: string | null;
+  counted?: boolean;
 };
 
-export type ServableLink = { link: LinkRow; files: (FileRow & { state: LinkFileView['state'] })[]; key: Buffer };
+export type ServableLink = { link: LinkRow; content: Inspection; counts: LinkCounts; key: Buffer };
 
-const EMPTY_COUNTS: LinkCounts = { opens: 0, started: 0, downloads: 0, verified: 0, visitors: 0, failedPasswords: 0 };
+const EMPTY_COUNTS: LinkCounts = {
+  opens: 0,
+  started: 0,
+  downloads: 0,
+  recipients: 0,
+  verified: 0,
+  visitors: 0,
+  failedPasswords: 0,
+};
 
 export type SharesDeps = {
   db: Db;
@@ -71,6 +86,7 @@ export class Shares {
   private readonly sensitive: SensitiveList;
   private readonly publicUrl: string;
   private readonly maxPasswordFailures: number;
+  private readonly content: ContentDeps;
   /** Bumped on every change to links, so cached views of them can tell they are stale. */
   revision = 0;
 
@@ -81,17 +97,13 @@ export class Shares {
     this.sensitive = deps.sensitive;
     this.publicUrl = deps.publicUrl;
     this.maxPasswordFailures = deps.maxPasswordFailures;
+    this.content = { storage: deps.storage, sensitive: deps.sensitive };
   }
 
-  async create(input: CreateLinkBody): Promise<LinkDetail> {
+  async create(input: CreateLinkBody, defaultPolicy: ChangePolicy = 'pause'): Promise<LinkDetail> {
     const body = createLinkBody.parse(input);
-    const files = this.resolveFiles(body.files);
-
-    if (!body.confirmSensitive) {
-      const flagged: string[] = [];
-      for (const file of files) if (await this.sensitive.matches(file)) flagged.push(file.path);
-      if (flagged.length) throw new ShareError(409, 'sensitive', { files: flagged });
-    }
+    const { items, flagged } = this.resolveItems(body.paths, body.confirmSensitive);
+    if (flagged.length && !body.confirmSensitive) throw new ShareError(409, 'sensitive', { files: flagged });
 
     const id = randomId(16);
     const key = crypto.randomBytes(32);
@@ -107,49 +119,96 @@ export class Shares {
           createdAt: Date.now(),
           expiresAt: body.expiresAt,
           maxDownloads: body.maxDownloads,
+          onChange: body.onChange ?? defaultPolicy,
         })
         .run();
       tx.insert(linkFiles)
-        .values(
-          files.map((file, position) => ({
-            linkId: id,
-            position,
-            path: file.path,
-            name: file.name,
-            size: file.size,
-            modifiedAt: file.modifiedAt,
-          })),
-        )
+        .values(items.map(({ files: _, ...item }, position) => ({ ...item, linkId: id, position })))
         .run();
+      items.forEach((item, position) => {
+        if (item.files) this.writeSnapshot(tx, id, position, item.files);
+      });
     });
     this.revision++;
     return this.detail(id);
   }
 
-  private resolveFiles(paths: string[]): StoredFile[] {
+  private resolveItems(paths: string[], includeSensitive: boolean): { items: NewItem[]; flagged: string[] } {
     const seen = new Set<string>();
-    return paths.flatMap((relative) => {
+    const items: NewItem[] = [];
+    const flagged: string[] = [];
+    for (const relative of paths) {
       try {
-        const file = this.storage.file(relative);
-        if (seen.has(file.path)) return [];
-        seen.add(file.path);
-        return [file];
+        if (this.storage.kindOf(relative) === 'file') {
+          const file = this.storage.file(relative);
+          if (seen.has(file.path)) continue;
+          seen.add(file.path);
+          if (this.sensitive.matches(file, file.absolute)) flagged.push(file.path);
+          items.push({
+            kind: 'file',
+            path: file.path,
+            name: file.name,
+            size: file.size,
+            modifiedAt: file.modifiedAt,
+            files: null,
+          });
+        } else {
+          const folder = this.storage.normalize(relative);
+          if (seen.has(folder)) continue;
+          seen.add(folder);
+          const snapshot = folderSnapshot(this.content, folder, includeSensitive);
+          flagged.push(...snapshot.flagged);
+          items.push({
+            kind: 'folder',
+            path: folder,
+            name: folder.split('/').at(-1) as string,
+            size: snapshot.files.reduce((sum, file) => sum + file.size, 0),
+            modifiedAt: 0,
+            files: snapshot.files,
+          });
+        }
       } catch (error) {
         if (error instanceof StorageError) throw new ShareError(400, `file_${error.code}`, { path: relative });
         throw error;
       }
-    });
+    }
+    // Something picked inside a folder that is shared as a whole would appear twice.
+    const folders = items.filter((item) => item.kind === 'folder').map((item) => `${item.path}/`);
+    const outer = items.filter((item) => !folders.some((folder) => item.path.startsWith(folder)));
+    const total = outer.reduce((sum, item) => sum + (item.files?.length ?? 1), 0);
+    if (total > MAX_LINK_FILES) throw new ShareError(400, 'file_too_many', { path: paths[0] });
+    return { items: outer, flagged: [...new Set(flagged)] };
+  }
+
+  private writeSnapshot(tx: Tx, linkId: string, position: number, files: FolderFile[]) {
+    tx.delete(folderSnapshots)
+      .where(and(eq(folderSnapshots.linkId, linkId), eq(folderSnapshots.position, position)))
+      .run();
+    for (let start = 0; start < files.length; start += SNAPSHOT_CHUNK) {
+      tx.insert(folderSnapshots)
+        .values(
+          files.slice(start, start + SNAPSHOT_CHUNK).map((file) => ({
+            linkId,
+            position,
+            relative: file.relative,
+            size: file.size,
+            modifiedAt: file.modifiedAt,
+          })),
+        )
+        .run();
+    }
   }
 
   list(): LinkSummary[] {
     const rows = this.db.select().from(links).orderBy(desc(links.createdAt)).all();
     const counts = this.counts();
-    return rows.map((row) => this.summarize(row, this.filesOf(row.id), counts.get(row.id)));
+    return rows.map((row) => this.summarize(row, this.inspect(row), counts.get(row.id)));
   }
 
   detail(id: string): LinkDetail {
     const row = this.row(id);
-    const summary = this.summarize(row, this.filesOf(id), this.counts(id).get(id));
+    const content = this.inspect(row);
+    const summary = this.summarize(row, content, this.counts(id).get(id));
     const history = this.db
       .select()
       .from(events)
@@ -157,16 +216,26 @@ export class Shares {
       .orderBy(desc(events.at), desc(events.id))
       .limit(500)
       .all();
-    return { ...summary, url: this.url(row), events: history.map(({ linkId: _, ...event }) => event as EventView) };
+    return {
+      ...summary,
+      url: this.url(row),
+      changes: content.changes.slice(0, MAX_CHANGES),
+      version: content.version,
+      events: history.map(({ linkId: _, ...event }) => event as EventView),
+    };
   }
 
   async update(id: string, input: UpdateLinkBody): Promise<LinkDetail> {
     const patch = updateLinkBody.parse(input);
     const row = this.row(id);
+    const accept = patch.acceptChanges
+      ? this.prepareAccept(row, patch.acceptChanges, patch.confirmSensitive ?? false)
+      : null;
     const changes: Partial<LinkRow> = {};
     if (patch.label !== undefined) changes.label = patch.label;
     if (patch.expiresAt !== undefined) changes.expiresAt = patch.expiresAt;
     if (patch.maxDownloads !== undefined) changes.maxDownloads = patch.maxDownloads;
+    if (patch.onChange !== undefined) changes.onChange = patch.onChange;
     if (patch.password !== undefined) {
       const key = this.vault.open(row.sealedKey, id);
       changes.passwordHash = patch.password ? await hashSecret(await passwordVerifier(patch.password, key, id)) : null;
@@ -178,19 +247,55 @@ export class Shares {
 
     this.db.transaction((tx) => {
       if (Object.keys(changes).length) tx.update(links).set(changes).where(eq(links.id, id)).run();
-      if (patch.acceptChanges) {
-        for (const file of this.filesOf(id)) {
-          if (this.storage.state(file) !== 'changed') continue;
-          const current = this.storage.file(file.path);
-          tx.update(linkFiles)
-            .set({ size: current.size, modifiedAt: current.modifiedAt })
-            .where(and(eq(linkFiles.linkId, id), eq(linkFiles.position, file.position)))
-            .run();
-        }
-      }
+      accept?.(tx);
     });
     this.revision++;
     return this.detail(id);
+  }
+
+  /**
+   * What is on disk now becomes what the link shares; items that are gone leave the link. Only the version the
+   * owner looked at is accepted: anything that appeared since, or a file now on the sensitive list, is refused.
+   */
+  private prepareAccept(link: LinkRow, version: string, confirmSensitive: boolean): (tx: Tx) => void {
+    const content = this.inspect(link);
+    if (content.version !== version) throw new ShareError(409, 'changes_moved');
+    const writes: ((tx: Tx) => void)[] = [];
+    const flagged: string[] = [];
+    try {
+      for (const { item, state } of content.items) {
+        const where = and(eq(linkFiles.linkId, link.id), eq(linkFiles.position, item.position));
+        if (state === 'ok') continue;
+        if (state === 'missing') {
+          writes.push((tx) => {
+            tx.delete(linkFiles).where(where).run();
+            tx.delete(folderSnapshots)
+              .where(and(eq(folderSnapshots.linkId, link.id), eq(folderSnapshots.position, item.position)))
+              .run();
+          });
+        } else if (item.kind === 'file') {
+          const current = this.storage.file(item.path);
+          if (this.sensitive.matches(current, current.absolute)) flagged.push(current.path);
+          writes.push((tx) =>
+            tx.update(linkFiles).set({ size: current.size, modifiedAt: current.modifiedAt }).where(where).run(),
+          );
+        } else {
+          const { files } = folderSnapshot(this.content, item.path, false);
+          const size = files.reduce((sum, file) => sum + file.size, 0);
+          writes.push((tx) => {
+            this.writeSnapshot(tx, link.id, item.position, files);
+            tx.update(linkFiles).set({ size }).where(where).run();
+          });
+        }
+      }
+    } catch (error) {
+      if (error instanceof StorageError) throw new ShareError(409, 'changes_moved');
+      throw error;
+    }
+    if (flagged.length && !confirmSensitive) throw new ShareError(409, 'sensitive', { files: flagged });
+    return (tx) => {
+      for (const write of writes) write(tx);
+    };
   }
 
   remove(id: string) {
@@ -201,6 +306,24 @@ export class Shares {
 
   activeCount(): number {
     return this.list().filter((link) => link.state === 'active').length;
+  }
+
+  /**
+   * Links that their own settings still allow and that still point at something on disk, without walking
+   * folders or comparing files: cheap enough to answer for every public request, which is all the switch needs.
+   */
+  openCount(): number {
+    const now = Date.now();
+    const rows = this.db
+      .select({ id: links.id })
+      .from(links)
+      .where(and(eq(links.active, true), isNull(links.lockedAt), or(isNull(links.expiresAt), gt(links.expiresAt, now))))
+      .all();
+    // A link at its limit stays open: the people who already downloaded may still come back for the files.
+    return rows.filter((row) => {
+      const items = this.db.select({ path: linkFiles.path }).from(linkFiles).where(eq(linkFiles.linkId, row.id)).all();
+      return items.some((item) => this.storage.exists(item.path));
+    }).length;
   }
 
   find(id: string): LinkRow | undefined {
@@ -217,14 +340,21 @@ export class Shares {
     return sha256(link.passwordHash ?? '').slice(0, 12);
   }
 
-  /** What the broker may serve right now, or why not. */
-  servable(id: string): { ok: true; value: ServableLink } | { ok: false; reason: LinkState | 'not_found' } {
+  /**
+   * What the broker may serve right now to this visitor, or why not. A link whose limit is reached keeps
+   * serving the people who already got the files: they may retry or fetch the other files.
+   */
+  servable(
+    id: string,
+    visitor?: string | null,
+  ): { ok: true; value: ServableLink } | { ok: false; reason: LinkState | 'not_found' } {
     const link = this.db.select().from(links).where(eq(links.id, id)).get();
     if (!link) return { ok: false, reason: 'not_found' };
-    const files = this.filesOf(id).map((file) => ({ ...file, state: this.storage.state(file) }));
-    const state = this.stateOf(link, files, this.counts(id).get(id) ?? EMPTY_COUNTS);
+    const content = this.inspect(link);
+    const counts = this.counts(id).get(id) ?? EMPTY_COUNTS;
+    const state = this.stateOf(link, content, counts, !!visitor && this.isRecipient(id, visitor));
     if (state !== 'active') return { ok: false, reason: state };
-    return { ok: true, value: { link, files, key: this.vault.open(link.sealedKey, id) } };
+    return { ok: true, value: { link, content, counts, key: this.vault.open(link.sealedKey, id) } };
   }
 
   record(linkId: string, event: NewEvent) {
@@ -235,6 +365,7 @@ export class Shares {
         at: Date.now(),
         type: event.type,
         file: event.file ?? null,
+        path: event.path?.slice(0, 1024) ?? null,
         downloadId: event.downloadId ?? null,
         ip: event.ip ?? null,
         country: event.country ?? null,
@@ -243,13 +374,14 @@ export class Shares {
         visitor: event.visitor ?? null,
         bytes: event.bytes ?? null,
         detail: event.detail?.slice(0, 256) ?? null,
+        counted: event.counted ?? false,
       })
       .run();
   }
 
   private startedDownload(linkId: string, downloadId: string) {
     return this.db
-      .select({ file: events.file, visitor: events.visitor })
+      .select({ file: events.file, path: events.path, visitor: events.visitor })
       .from(events)
       .where(and(eq(events.linkId, linkId), eq(events.downloadId, downloadId), eq(events.type, 'download_started')))
       .get();
@@ -281,8 +413,9 @@ export class Shares {
     return started !== undefined && !!visitor && started.visitor === visitor;
   }
 
-  downloadFile(linkId: string, downloadId: string): number | null {
-    return this.startedDownload(linkId, downloadId)?.file ?? null;
+  downloadTarget(linkId: string, downloadId: string): { file: number | null; path: string | null } {
+    const started = this.startedDownload(linkId, downloadId);
+    return { file: started?.file ?? null, path: started?.path ?? null };
   }
 
   /** Counts a wrong password; returns true when the link just got locked. */
@@ -316,8 +449,17 @@ export class Shares {
     return row;
   }
 
-  private filesOf(id: string): FileRow[] {
-    return this.db.select().from(linkFiles).where(eq(linkFiles.linkId, id)).orderBy(linkFiles.position).all();
+  private inspect(link: LinkRow): Inspection {
+    const items = this.db
+      .select()
+      .from(linkFiles)
+      .where(eq(linkFiles.linkId, link.id))
+      .orderBy(linkFiles.position)
+      .all();
+    const snapshots: Snapshot[] = items.some((item) => item.kind === 'folder')
+      ? this.db.select().from(folderSnapshots).where(eq(folderSnapshots.linkId, link.id)).all()
+      : [];
+    return inspect(items, snapshots, link.onChange, this.content);
   }
 
   private url(row: LinkRow): string {
@@ -330,7 +472,8 @@ export class Shares {
         linkId: events.linkId,
         opens: sql<number>`sum(${events.type} = 'open')`,
         started: sql<number>`count(distinct case when ${events.type} = 'download_started' then ${events.downloadId} end)`,
-        downloads: sql<number>`count(distinct case when ${events.type} = 'download_finished' then ${events.downloadId} end)`,
+        downloads: sql<number>`count(distinct case when ${events.counted} then ${events.downloadId} end)`,
+        recipients: sql<number>`count(distinct case when ${events.counted} then ${events.visitor} end)`,
         verified: sql<number>`count(distinct case when ${events.type} = 'download_verified' then ${events.downloadId} end)`,
         visitors: sql<number>`count(distinct case when ${events.type} = 'open' then coalesce(${events.visitor}, ${events.ip}) end)`,
         failedPasswords: sql<number>`sum(${events.type} = 'password_failed')`,
@@ -343,38 +486,53 @@ export class Shares {
     return new Map(rows.map(({ linkId, ...counts }) => [linkId, counts]));
   }
 
-  private stateOf(link: LinkRow, files: { state: LinkFileView['state'] }[], counts: LinkCounts): LinkState {
+  /** Whether this visitor already got the files of this link once. */
+  isRecipient(linkId: string, visitor: string): boolean {
+    const row = this.db
+      .select({ id: events.id })
+      .from(events)
+      .where(and(eq(events.linkId, linkId), eq(events.visitor, visitor), eq(events.counted, true)))
+      .get();
+    return row !== undefined;
+  }
+
+  private stateOf(link: LinkRow, content: Inspection, counts: LinkCounts, recipient = false): LinkState {
     if (link.lockedAt) return 'locked';
     if (!link.active) return 'disabled';
     if (link.expiresAt && link.expiresAt <= Date.now()) return 'expired';
-    // Every started download uses up the quota: counting only finished ones lets a client stop one record short.
-    if (link.maxDownloads && counts.started >= link.maxDownloads) return 'exhausted';
-    if (!files.some((file) => file.state === 'ok')) return 'unavailable';
+    // The limit counts people (visitors) who got the files, so whoever already did can always retry.
+    if (link.maxDownloads && counts.recipients >= link.maxDownloads && !recipient) return 'exhausted';
+    const present = content.items.some((item) => item.state !== 'missing');
+    if (link.onChange === 'pause' && content.changed && present) return 'paused';
+    if (content.entries.length === 0) return 'unavailable';
     return 'active';
   }
 
   private summarize(
     row: LinkRow,
-    files: FileRow[],
+    content: Inspection,
     counts: (LinkCounts & { lastActivityAt: number | null }) | undefined,
   ): LinkSummary {
-    const views = files.map((file) => ({
-      position: file.position,
-      path: file.path,
-      name: file.name,
-      size: file.size,
-      state: this.storage.state(file),
-    }));
     const { lastActivityAt, ...linkCounts } = counts ?? { ...EMPTY_COUNTS, lastActivityAt: null };
     return {
       id: row.id,
       label: row.label,
-      state: this.stateOf(row, views, linkCounts),
+      state: this.stateOf(row, content, linkCounts),
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
       maxDownloads: row.maxDownloads,
       hasPassword: row.passwordHash !== null,
-      files: views,
+      onChange: row.onChange,
+      items: content.items.map(({ item, name, state, changes, size, fileCount }) => ({
+        position: item.position,
+        kind: item.kind,
+        path: item.path,
+        name,
+        size,
+        fileCount,
+        state,
+        changes,
+      })),
       counts: linkCounts,
       lastActivityAt,
     };

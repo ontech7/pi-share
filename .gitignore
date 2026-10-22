@@ -1,0 +1,6 @@
+node_modules/
+data/
+dev/data/
+*.secret
+*.env
+.DS_Store

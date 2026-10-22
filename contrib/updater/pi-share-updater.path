@@ -1,0 +1,9 @@
+[Unit]
+Description=pi-share: watch for update requests from the admin
+
+[Path]
+PathExists=/var/lib/pi-share-update/request/request.json
+Unit=pi-share-updater.service
+
+[Install]
+WantedBy=multi-user.target

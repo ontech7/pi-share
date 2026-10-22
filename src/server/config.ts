@@ -42,6 +42,13 @@ const schema = z
     DEFAULT_EXPIRY_DAYS: z.coerce.number().int().min(0).max(3650).default(7),
     MAX_PASSWORD_FAILURES: z.coerce.number().int().min(1).max(1000).default(10),
     EVENT_RETENTION_DAYS: z.coerce.number().int().min(1).max(36500).default(365),
+    UPDATE_CHECK: flag(true),
+    UPDATE_REPO: z
+      .string()
+      .regex(/^[\w.-]+\/[\w.-]+$/)
+      .default('ontech7/pi-share'),
+    UPDATE_REQUEST_DIR: z.string().default(''),
+    UPDATE_STATUS_DIR: z.string().default(''),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'silent']).default('info'),
   })
   .transform((env) => ({
@@ -67,6 +74,10 @@ const schema = z
     defaultExpiryDays: env.DEFAULT_EXPIRY_DAYS,
     maxPasswordFailures: env.MAX_PASSWORD_FAILURES,
     logLevel: env.LOG_LEVEL,
+    updateCheck: env.UPDATE_CHECK,
+    updateRepo: env.UPDATE_REPO,
+    updateRequestDir: env.UPDATE_REQUEST_DIR,
+    updateStatusDir: env.UPDATE_STATUS_DIR,
     eventRetentionDays: env.EVENT_RETENTION_DAYS,
   }));
 

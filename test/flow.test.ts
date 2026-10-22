@@ -16,6 +16,7 @@ import { SensitiveList } from '../src/server/sensitive.ts';
 import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
 import { Storage } from '../src/server/storage.ts';
+import { Updates } from '../src/server/updates.ts';
 import type { LinkDetail, ShareMeta } from '../src/shared/api.ts';
 import { decryptStream, fromBase64Url, keyProof, openMeta, passwordVerifier, type Sealed } from '../src/shared/wire.ts';
 import { tempDir, writeFiles } from './helpers.ts';
@@ -123,7 +124,15 @@ beforeAll(async () => {
     publicUrl: config.publicUrl,
     maxPasswordFailures: config.maxPasswordFailures,
   });
-  admin = await buildAdmin({ config, shares, settings, storage, setupCode: SETUP_CODE });
+  const updates = new Updates({
+    current: '1.0.0',
+    fetchLatest: async () => null,
+    settings,
+    autoCheckDefault: false,
+    requestDir: '',
+    statusDir: '',
+  });
+  admin = await buildAdmin({ config, shares, settings, storage, updates, setupCode: SETUP_CODE });
   broker = buildBroker({ shares, settings, storage, vault, secret: null });
   await listen(broker, config.brokerListen);
   edge = await buildEdge({ config, brokerSecret: null, staticRoot, onlineCacheMs: 0 });

@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { ArrowLeft, ChevronRight, Link2, type LucideIcon, Radio, UserRound } from 'lucide-react';
+import { ArrowLeft, ArrowUpCircle, ChevronRight, Link2, type LucideIcon, Radio, UserRound } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { Link } from 'wouter';
 import type { MessageKey } from '../../lib/i18n.ts';
@@ -8,6 +8,7 @@ import { Card } from '../../ui/Card.tsx';
 import { AccountSection } from '../settings/AccountSection.tsx';
 import { NewLinksSection } from '../settings/NewLinksSection.tsx';
 import { ServiceSection } from '../settings/ServiceSection.tsx';
+import { UpdatesSection } from '../settings/UpdatesSection.tsx';
 
 type Section = {
   id: string;
@@ -27,6 +28,14 @@ const SECTIONS: Section[] = [
     hint: 'settings.newLinksShort',
     intro: 'settings.newLinksHint',
     body: NewLinksSection,
+  },
+  {
+    id: 'updates',
+    icon: ArrowUpCircle,
+    title: 'updates.title',
+    hint: 'updates.hint',
+    intro: 'updates.intro',
+    body: UpdatesSection,
   },
   { id: 'account', icon: UserRound, title: 'settings.account', hint: 'settings.accountHint', body: AccountSection },
 ];

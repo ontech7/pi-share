@@ -19,7 +19,8 @@ Self-hosted on a Raspberry Pi or anything that runs Docker. No uploads, no third
 [![Image](https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/ontech7/pi-share/pkgs/container/pi-share)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [How it works](#how-it-works) ·
+[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Updates](#updates) ·
+[How it works](#how-it-works) ·
 [Security](#security-model) · [Configuration](#configuration) · [Changelog](CHANGELOG.md)
 
 <br />
@@ -118,6 +119,46 @@ clone and set `PI_SHARE_IMAGE=pi-share:local`.
 > [!TIP]
 > The containers run as uid `10001`. If some of your folders are readable only by their owner, run them as that
 > user instead (`user:` in `compose.yaml`); pi-share tells you clearly when it may not read a folder.
+
+## Updates
+
+The admin shows the running version and, unless you turn it off, asks GitHub every few hours which is the latest
+release (nothing else is sent). A newer one appears next to the logo and in **Settings → Updates**, with its
+notes. With the optional updater on the host, one click installs it; without it, the page shows the two commands
+to run.
+
+The updater is the only piece that runs as root, because it drives Docker: the admin never gets the Docker
+socket. The admin can only leave a version number in a folder, and the updater decides everything again by itself:
+- it reads nothing but that version (no symlinks, no special files, a few bytes at most) and echoes nothing back;
+- the version must be a published, non-prerelease release of this repository, newer than the running one;
+- the image must declare this repository and that version and runs pinned by digest; with the GitHub CLI and a
+  token, its build provenance is verified too: built by the release workflow, from that version's tag
+  (`VERIFY_PROVENANCE=required` makes it mandatory);
+- the database is copied first (when there is room for it), and if the new version is not healthy within two
+  minutes, or the run is stopped half-way, the previous image and database come back. An update a power cut
+  interrupted is undone at the next boot.
+
+<details>
+<summary><strong>Install the updater</strong></summary>
+
+Read [`contrib/updater`](contrib/updater) first: it runs as root. The defaults expect `compose.yaml`,
+[`compose.updater.yaml`](contrib/updater/compose.updater.yaml) and `.env` in `/etc/pi-share`; elsewhere, change the
+paths in `updater.env` and `ReadWritePaths` in the service. `PI_SHARE_IMAGE` in `.env` can name a full version
+(`0.4.0`) or a moving one (`0.4`); after the first update it is pinned to the exact version and digest.
+
+```sh
+sudo install -m 0755 -D contrib/updater/pi-share-updater.py /usr/local/lib/pi-share/pi-share-updater.py
+sudo install -m 0644 contrib/updater/updater.env.example /etc/pi-share/updater.env
+sudo install -m 0644 contrib/updater/pi-share-updater.path contrib/updater/pi-share-updater.service /etc/systemd/system/
+sudo install -d -o 10001 -g 10001 -m 0750 /var/lib/pi-share-update/request
+sudo install -d -m 0755 /var/lib/pi-share-update/status
+sudo install -d -m 0700 /var/lib/pi-share-update/backup /var/lib/pi-share-update/docker /var/lib/pi-share-update/gh
+sudo systemctl daemon-reload && sudo systemctl enable pi-share-updater.service
+sudo systemctl enable --now pi-share-updater.path
+cd /etc/pi-share && docker compose -f compose.yaml -f compose.updater.yaml up -d
+```
+
+</details>
 
 ## How it works
 

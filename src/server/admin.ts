@@ -16,6 +16,7 @@ import { z } from 'zod';
 import {
   changePasswordBody,
   createLinkBody,
+  installUpdateBody,
   loginBody,
   type Preferences,
   preferencesBody,
@@ -24,12 +25,14 @@ import {
   serviceBody,
   setupBody,
   updateLinkBody,
+  updateSettingsBody,
 } from '../shared/api.ts';
 import { isOnline } from './broker.ts';
 import type { Config } from './config.ts';
 import type { Settings } from './settings.ts';
 import { ShareError, type Shares } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
+import type { Updates } from './updates.ts';
 
 const SESSION_COOKIE = 'pi_share_session';
 const CSRF_HEADER = 'x-pi-share';
@@ -40,6 +43,7 @@ export type AdminDeps = {
   shares: Shares;
   settings: Settings;
   storage: Storage;
+  updates: Updates;
   setupCode: string | null;
   staticRoot?: string;
 };
@@ -64,7 +68,7 @@ export function generateSetupCode(): string {
   return `${raw.slice(0, 5)}-${raw.slice(5)}`;
 }
 
-export async function buildAdmin({ config, shares, settings, storage, setupCode, staticRoot }: AdminDeps) {
+export async function buildAdmin({ config, shares, settings, storage, updates, setupCode, staticRoot }: AdminDeps) {
   const app = Fastify({
     logger: { level: config.logLevel },
     trustProxy: config.trustedProxies.length ? config.trustedProxies : false,
@@ -226,6 +230,23 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
   app.patch('/api/preferences', { schema: { body: preferencesBody } }, async (request) =>
     settings.updatePreferences(request.body, defaults),
   );
+
+  app.get('/api/updates', async () => {
+    updates.maybeCheck();
+    return updates.info();
+  });
+  app.post('/api/updates/check', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async () => {
+    await updates.check();
+    return updates.info();
+  });
+  app.patch('/api/updates', { schema: { body: updateSettingsBody } }, async (request) => {
+    updates.setAutoCheck(request.body.autoCheck);
+    return updates.info();
+  });
+  app.post('/api/updates/install', { schema: { body: installUpdateBody } }, async (request, reply) => {
+    updates.requestInstall(request.body.version);
+    return reply.code(202).send(updates.info());
+  });
 
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 

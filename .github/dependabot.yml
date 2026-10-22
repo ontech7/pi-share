@@ -8,13 +8,25 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # The Node types follow the Node LTS the image runs.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
     target-branch: develop
     schedule:
       interval: weekly
+    # Every action in one pull request: CI and the release workflow are checked together.
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     target-branch: develop
     schedule:
       interval: weekly
+    # Node majors are a deliberate move from one LTS to the next (and the odd ones never become LTS).
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]

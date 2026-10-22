@@ -138,6 +138,9 @@ class ByteQueue {
   }
 }
 
+/** The Web Crypto key type, the same with the DOM types and with Node's. */
+type AesKey = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
+
 /** Ciphertext in, verified plaintext out. Throws WireError on any tampering or truncation. */
 export function decryptStream(
   linkKey: Uint8Array<ArrayBuffer>,
@@ -146,14 +149,14 @@ export function decryptStream(
   onProgress?: (plainBytes: number) => void,
 ): TransformStream<Uint8Array, Uint8Array> {
   const queue = new ByteQueue();
-  let key: CryptoKey | null = null;
+  let key: AesKey | null = null;
   let recordSize = 0;
   let counter = 0;
 
   const open = async (record: Uint8Array<ArrayBuffer>, last: boolean) => {
     try {
       const plain = new Uint8Array(
-        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: recordNonce(counter++, last) }, key as CryptoKey, record),
+        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: recordNonce(counter++, last) }, key as AesKey, record),
       );
       onProgress?.(plain.length);
       return plain;

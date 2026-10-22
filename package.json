@@ -1,12 +1,12 @@
 {
   "name": "pi-share",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "license": "MIT",
   "description": "Self-hosted, end-to-end encrypted share links for files already on your disk. Built for a Raspberry Pi.",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=24"
   },
   "scripts": {
     "dev:admin": "node --watch src/server/bin/admin.ts",
@@ -45,7 +45,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.5",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

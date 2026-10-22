@@ -55,9 +55,10 @@ export type NewEvent = Visit & {
   downloadId?: string | null;
   bytes?: number | null;
   detail?: string | null;
+  counted?: boolean;
 };
 
-export type ServableLink = { link: LinkRow; content: Inspection; key: Buffer };
+export type ServableLink = { link: LinkRow; content: Inspection; counts: LinkCounts; key: Buffer };
 
 const EMPTY_COUNTS: LinkCounts = { opens: 0, started: 0, downloads: 0, verified: 0, visitors: 0, failedPasswords: 0 };
 
@@ -312,7 +313,7 @@ export class Shares {
       .all();
     const counts = rows.some((row) => row.maxDownloads) ? this.counts() : new Map();
     return rows.filter((row) => {
-      if (row.maxDownloads && (counts.get(row.id)?.started ?? 0) >= row.maxDownloads) return false;
+      if (row.maxDownloads && (counts.get(row.id)?.downloads ?? 0) >= row.maxDownloads) return false;
       const items = this.db.select({ path: linkFiles.path }).from(linkFiles).where(eq(linkFiles.linkId, row.id)).all();
       return items.some((item) => this.storage.exists(item.path));
     }).length;
@@ -337,9 +338,10 @@ export class Shares {
     const link = this.db.select().from(links).where(eq(links.id, id)).get();
     if (!link) return { ok: false, reason: 'not_found' };
     const content = this.inspect(link);
-    const state = this.stateOf(link, content, this.counts(id).get(id) ?? EMPTY_COUNTS);
+    const counts = this.counts(id).get(id) ?? EMPTY_COUNTS;
+    const state = this.stateOf(link, content, counts);
     if (state !== 'active') return { ok: false, reason: state };
-    return { ok: true, value: { link, content, key: this.vault.open(link.sealedKey, id) } };
+    return { ok: true, value: { link, content, counts, key: this.vault.open(link.sealedKey, id) } };
   }
 
   record(linkId: string, event: NewEvent) {
@@ -359,6 +361,7 @@ export class Shares {
         visitor: event.visitor ?? null,
         bytes: event.bytes ?? null,
         detail: event.detail?.slice(0, 256) ?? null,
+        counted: event.counted ?? false,
       })
       .run();
   }
@@ -456,7 +459,7 @@ export class Shares {
         linkId: events.linkId,
         opens: sql<number>`sum(${events.type} = 'open')`,
         started: sql<number>`count(distinct case when ${events.type} = 'download_started' then ${events.downloadId} end)`,
-        downloads: sql<number>`count(distinct case when ${events.type} = 'download_finished' then ${events.downloadId} end)`,
+        downloads: sql<number>`count(distinct case when ${events.counted} then ${events.downloadId} end)`,
         verified: sql<number>`count(distinct case when ${events.type} = 'download_verified' then ${events.downloadId} end)`,
         visitors: sql<number>`count(distinct case when ${events.type} = 'open' then coalesce(${events.visitor}, ${events.ip}) end)`,
         failedPasswords: sql<number>`sum(${events.type} = 'password_failed')`,
@@ -473,8 +476,8 @@ export class Shares {
     if (link.lockedAt) return 'locked';
     if (!link.active) return 'disabled';
     if (link.expiresAt && link.expiresAt <= Date.now()) return 'expired';
-    // Every started download uses up the quota: counting only finished ones lets a client stop one record short.
-    if (link.maxDownloads && counts.started >= link.maxDownloads) return 'exhausted';
+    // Only downloads the recipient got (all of it, or all but the last record) use up the quota.
+    if (link.maxDownloads && counts.downloads >= link.maxDownloads) return 'exhausted';
     const present = content.items.some((item) => item.state !== 'missing');
     if (link.onChange === 'pause' && content.changed && present) return 'paused';
     if (content.entries.length === 0) return 'unavailable';

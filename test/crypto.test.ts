@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
+  downloadCounts,
   encryptedSize,
   encryptStream,
   hashSecret,
   keyProof,
   passwordVerifier,
+  plainDelivered,
   sealMeta,
   Vault,
   verifySecret,
@@ -133,5 +135,32 @@ describe('plain size', () => {
       expect(plainSize(encryptedSize(size))).toBe(size);
       expect(plainSize(encryptedSize(size, 1024), 1024)).toBe(size);
     }
+  });
+});
+
+describe('download quota', () => {
+  const R = 1024;
+  const size = 10 * R + 300;
+  const total = encryptedSize(size, R);
+  const upTo = (records: number) => 24 + records * (R + 16);
+
+  it('knows how much plaintext whole records hold', () => {
+    expect(plainDelivered(0, size, R)).toBe(0);
+    expect(plainDelivered(upTo(1) - 1, size, R)).toBe(0);
+    expect(plainDelivered(upTo(3), size, R)).toBe(3 * R);
+    expect(plainDelivered(total, size, R)).toBe(size);
+  });
+
+  it('counts a download once all but the last record arrived, never earlier', () => {
+    expect(downloadCounts(upTo(9), size, R)).toBe(false);
+    expect(downloadCounts(upTo(10), size, R)).toBe(true);
+    expect(downloadCounts(total, size, R)).toBe(true);
+  });
+
+  it('counts a one-record file only when it is complete', () => {
+    expect(downloadCounts(encryptedSize(300, R) - 1, 300, R)).toBe(false);
+    expect(downloadCounts(encryptedSize(300, R), 300, R)).toBe(true);
+    expect(downloadCounts(encryptedSize(0, R), 0, R)).toBe(true);
+    expect(downloadCounts(10, 0, R)).toBe(false);
   });
 });

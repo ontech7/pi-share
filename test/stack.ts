@@ -1,6 +1,7 @@
 import path from 'node:path';
+import { Agent, request } from 'undici';
 import { buildAdmin } from '../src/server/admin.ts';
-import { buildBroker } from '../src/server/broker.ts';
+import { buildBroker, TICKET_HEADER, VISIT_HEADER } from '../src/server/broker.ts';
 import { loadConfig } from '../src/server/config.ts';
 import { loadOrCreateKey, Vault } from '../src/server/crypto.ts';
 import { openDatabase } from '../src/server/db/index.ts';
@@ -107,5 +108,15 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
 
   const close = () => Promise.all([admin.close(), broker.close(), edge.close()]);
 
-  return { root, storageRoot, admin, edge, shares, adminCall, visit, call, open, unlock, keyOf, close };
+  /** Starts a download straight on the broker socket, so a test can stop reading or hang up midway. */
+  const rawDownload = (visitor: Visitor, linkId: string, part: string, ticket: string) =>
+    request(`http://localhost/links/${linkId}/files/${part}`, {
+      dispatcher: new Agent({ connect: { socketPath: `${sockets}/broker.sock` } }),
+      headers: {
+        [VISIT_HEADER]: JSON.stringify({ ip: visitor.ip, visitor: visitor.cookie.split('=')[1] }),
+        [TICKET_HEADER]: ticket,
+      },
+    });
+
+  return { root, storageRoot, admin, edge, shares, adminCall, visit, call, open, unlock, keyOf, rawDownload, close };
 }

@@ -82,7 +82,9 @@ export function LinkScreen({ id }: { id: string }) {
 
   const data: LinkDetail = link.data;
   const changed = data.changes.length > 0;
-  const downloads = data.maxDownloads ? `${data.counts.started} / ${data.maxDownloads}` : String(data.counts.downloads);
+  const downloads = data.maxDownloads
+    ? `${data.counts.downloads} / ${data.maxDownloads}`
+    : String(data.counts.downloads);
 
   return (
     <div className="flex animate-enter flex-col gap-8">

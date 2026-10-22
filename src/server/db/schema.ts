@@ -65,6 +65,8 @@ export const events = sqliteTable(
     visitor: text(),
     bytes: integer(),
     detail: text(),
+    /** Set on the event that ends a download when that download uses up the quota. */
+    counted: integer({ mode: 'boolean' }).notNull().default(false),
   },
   (table) => [index('events_link_at').on(table.linkId, table.at)],
 );

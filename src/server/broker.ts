@@ -4,7 +4,17 @@ import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fas
 import { z } from 'zod';
 import type { ShareMeta } from '../shared/api.ts';
 import type { Entry } from './content.ts';
-import { encryptedSize, encryptStream, randomId, safeEqual, sealMeta, type Vault, verifySecret } from './crypto.ts';
+import {
+  downloadCounts,
+  encryptedSize,
+  encryptStream,
+  plainDelivered,
+  randomId,
+  safeEqual,
+  sealMeta,
+  type Vault,
+  verifySecret,
+} from './crypto.ts';
 import type { Settings } from './settings.ts';
 import type { ServableLink, Shares, Visit } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
@@ -229,6 +239,11 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       ) {
         return reply.code(429).send({ error: 'busy' });
       }
+      // Downloads in flight hold their place in the quota, so parallel ones cannot go past it.
+      const { maxDownloads } = found.value.link;
+      if (maxDownloads && found.value.counts.downloads + (perLink.get(id) ?? 0) >= maxDownloads) {
+        return reply.code(429).send({ error: 'busy' });
+      }
 
       const abort = new AbortController();
       const opener = (entry: Entry) => () =>
@@ -257,6 +272,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
       const downloadId = randomId(9);
       let sent = 0;
+      let delivered = 0;
       let settled = false;
       let sentAtLastCheck = -1;
 
@@ -266,7 +282,16 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         clearInterval(watchdog);
         adjust(perLink, id, -1);
         adjust(perVisitor, visitor, -1);
-        shares.record(id, { ...visit, ...target, type, downloadId, bytes: sent, detail });
+        const finished = type === 'download_finished';
+        shares.record(id, {
+          ...visit,
+          ...target,
+          type,
+          downloadId,
+          bytes: finished ? sent : plainDelivered(delivered, plainSize),
+          detail,
+          counted: finished || downloadCounts(delivered, plainSize),
+        });
       };
 
       // A client that stops reading would otherwise hold a download slot forever.
@@ -287,6 +312,9 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       });
       const encrypted = pipeline(source, encryptStream(found.value.key, id, part), (error) => {
         if (error) settle('download_aborted', error.message);
+      });
+      encrypted.on('data', (chunk: Buffer) => {
+        delivered += chunk.length;
       });
       encrypted.on('end', () => settle(sent === plainSize ? 'download_finished' : 'download_aborted'));
       reply.raw.on('close', () => {

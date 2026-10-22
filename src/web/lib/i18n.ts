@@ -100,7 +100,8 @@ const en = {
   'create.expiry30': '30 days',
   'create.expiryNever': 'Never',
   'create.maxDownloads': 'Download limit',
-  'create.maxDownloadsHint': 'Every started download counts, even if interrupted. "Download all" counts as one.',
+  'create.maxDownloadsHint':
+    'Only completed downloads count: a cancelled or interrupted one can be retried. "Download all" counts as one.',
   'create.unlimited': 'Unlimited',
   'create.onChange': 'When the files change',
   'create.onChangePause': 'Pause the link',
@@ -309,7 +310,8 @@ const it: Record<MessageKey, string> = {
   'create.expiry30': '30 giorni',
   'create.expiryNever': 'Mai',
   'create.maxDownloads': 'Download massimi',
-  'create.maxDownloadsHint': 'Conta ogni download avviato, anche se interrotto. "Scarica tutto" conta come uno.',
+  'create.maxDownloadsHint':
+    'Contano solo i download completati: uno annullato o interrotto si può ritentare. "Scarica tutto" conta come uno.',
   'create.unlimited': 'Illimitati',
   'create.onChange': 'Quando i file cambiano',
   'create.onChangePause': 'Metti in pausa',

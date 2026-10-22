@@ -13,7 +13,7 @@ Self-hosted on a Raspberry Pi or anything that runs Docker. No uploads, no third
 ![Coverage gate](https://img.shields.io/badge/coverage%20gate-%E2%89%A585%25-brightgreen)
 ![E2E](https://img.shields.io/badge/e2e-real%20browser-brightgreen)
 <br />
-![Node](https://img.shields.io/badge/node-%E2%89%A522.18-339933?logo=node.js&logoColor=white)
+![Node](https://img.shields.io/badge/node-%E2%89%A524-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 [![Image](https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/ontech7/pi-share/pkgs/container/pi-share)
@@ -304,7 +304,7 @@ pnpm typecheck && pnpm lint
 pnpm build && pnpm e2e    # real browser, screenshots in e2e/.out/shots
 ```
 
-**Stack:** Node 22 running TypeScript natively, Fastify, Drizzle on SQLite, Zod, React 19, TanStack Query,
+**Stack:** Node 24 running TypeScript natively, Fastify, Drizzle on SQLite, Zod, React 19, TanStack Query,
 Tailwind CSS 4, Vite, Vitest, Biome.
 
 ```text

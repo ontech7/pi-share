@@ -53,8 +53,14 @@ class Prober {
     return false;
   }
 
+  private sweep(now: number) {
+    for (const [ip, entry] of this.misses) if (now - entry.since >= this.window) this.misses.delete(ip);
+    for (const [ip, until] of this.blocked) if (until <= now) this.blocked.delete(ip);
+  }
+
   miss(ip: string) {
     const now = Date.now();
+    if (this.misses.size > 10_000) this.sweep(now);
     const entry = this.misses.get(ip);
     const current = entry && now - entry.since < this.window ? entry : { count: 0, since: now };
     current.count++;
@@ -76,12 +82,13 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
   const visitOf = (request: FastifyRequest): Visit => {
     const forwarded = config.clientIpHeader ? request.headers[config.clientIpHeader] : undefined;
     const country = config.countryHeader ? request.headers[config.countryHeader] : undefined;
+    const cookie = request.cookies[VISITOR_COOKIE];
     return {
-      ip: (typeof forwarded === 'string' && forwarded) || request.socket.remoteAddress || 'unknown',
-      country: typeof country === 'string' ? country : null,
-      userAgent: request.headers['user-agent'] ?? null,
-      language: request.headers['accept-language'] ?? null,
-      visitor: request.cookies[VISITOR_COOKIE] ?? null,
+      ip: ((typeof forwarded === 'string' && forwarded) || request.socket.remoteAddress || 'unknown').slice(0, 64),
+      country: typeof country === 'string' ? country.slice(0, 8) : null,
+      userAgent: request.headers['user-agent']?.slice(0, 512) ?? null,
+      language: request.headers['accept-language']?.slice(0, 128) ?? null,
+      visitor: cookie && /^[\w-]{22}$/.test(cookie) ? cookie : null,
     };
   };
 
@@ -161,7 +168,11 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
     if (!request.url.startsWith('/assets/')) reply.header('cache-control', 'no-store');
-    if (prober.isBlocked(visitOf(request).ip) || !(await isOnline())) return reply.code(404).send();
+    const visit = visitOf(request);
+    if (prober.isBlocked(visit.ip) || !(await isOnline())) return reply.code(404).send();
+    // The API is only for pages served by /d/:id, which always set the visitor cookie tickets are bound to.
+    if (request.routeOptions.url?.startsWith('/api/') && !visit.visitor)
+      return reply.code(403).send({ error: 'cookies' });
   });
 
   await app.register(fastifyStatic, { root: path.resolve(staticRoot), index: false, wildcard: false, serve: false });
@@ -201,7 +212,7 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
     const { id } = request.params as { id: string };
     const visit = visitOf(request);
     if (!linkId.safeParse(id).success) return reply.code(404).send();
-    return relayJson(reply, await callBroker('POST', `/links/${id}/open`, visit), visit);
+    return relayJson(reply, await callBroker('POST', `/links/${id}/open`, visit, { body: request.body ?? {} }), visit);
   });
 
   app.post(

@@ -2,7 +2,21 @@ import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
 
-export type ZipEntry = { name: string; absolute: string; size: number; modifiedAt: number };
+export type ZipEntry = { name: string; size: number; modifiedAt: number; open: () => number };
+
+/** Exactly `size` bytes from an already opened descriptor; fewer means the file changed underneath. */
+export async function* readExactly(fd: number, size: number, signal?: AbortSignal): AsyncGenerator<Buffer> {
+  if (size === 0) {
+    fs.closeSync(fd);
+    return;
+  }
+  let read = 0;
+  for await (const chunk of fs.createReadStream('', { fd, start: 0, end: size - 1, autoClose: true, signal })) {
+    read += (chunk as Buffer).length;
+    yield chunk as Buffer;
+  }
+  if (read !== size) throw new Error('file shrank while being read');
+}
 
 function dosDateTime(ms: number): { time: number; date: number } {
   const d = new Date(ms);
@@ -71,12 +85,10 @@ export function zipStream(entries: ZipEntry[], signal?: AbortSignal): Readable {
 
       let crc = 0;
       let written = 0;
-      if (entry.size > 0) {
-        for await (const chunk of fs.createReadStream(entry.absolute, { end: entry.size - 1, signal })) {
-          crc = zlib.crc32(chunk as Buffer, crc);
-          written += (chunk as Buffer).length;
-          yield chunk as Buffer;
-        }
+      for await (const chunk of readExactly(entry.open(), entry.size, signal)) {
+        crc = zlib.crc32(chunk, crc);
+        written += chunk.length;
+        yield chunk;
       }
       if (written !== entry.size) throw new Error(`${entry.name} changed while being archived`);
 

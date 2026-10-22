@@ -4,7 +4,7 @@ import type { BrowseEntry, BrowseResult, FileState } from '../shared/api.ts';
 
 const SYSTEM_NAMES = new Set(['system volume information', 'lost+found']);
 
-export type StorageErrorCode = 'invalid' | 'denied' | 'not_found' | 'not_a_file';
+export type StorageErrorCode = 'invalid' | 'denied' | 'not_found' | 'not_a_file' | 'changed';
 
 export class StorageError extends Error {
   readonly code: StorageErrorCode;
@@ -92,6 +92,30 @@ export class Storage {
     return { path: clean, absolute, name: path.basename(clean), size: stat.size, modifiedAt: Math.trunc(stat.mtimeMs) };
   }
 
+  /**
+   * Opens a linked file for reading and proves the descriptor is that file: no symlink at the end
+   * (O_NOFOLLOW), still inside the root (the kernel's own path for the descriptor, where available),
+   * same inode as the checked path, same size and modification time as when it was linked.
+   */
+  open(stored: { path: string; size: number; modifiedAt: number }): number {
+    const { absolute } = this.resolve(stored.path);
+    const fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile()) throw new StorageError('not_a_file');
+      const kernelPath = descriptorPath(fd);
+      if (kernelPath !== null && kernelPath !== absolute) throw new StorageError('denied');
+      const checked = fs.statSync(absolute);
+      if (checked.ino !== opened.ino || checked.dev !== opened.dev) throw new StorageError('denied');
+      if (opened.size !== stored.size || Math.trunc(opened.mtimeMs) !== stored.modifiedAt)
+        throw new StorageError('changed');
+      return fd;
+    } catch (error) {
+      fs.closeSync(fd);
+      throw error;
+    }
+  }
+
   state(stored: { path: string; size: number; modifiedAt: number }): FileState {
     try {
       const current = this.file(stored.path);
@@ -99,5 +123,13 @@ export class Storage {
     } catch {
       return 'missing';
     }
+  }
+}
+
+function descriptorPath(fd: number): string | null {
+  try {
+    return fs.readlinkSync(`/proc/self/fd/${fd}`);
+  } catch {
+    return null;
   }
 }

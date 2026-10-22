@@ -37,6 +37,10 @@ const admin = await buildAdmin({
 });
 const broker = buildBroker({ shares, settings, storage, vault, secret: readSecret(config.brokerSecretFile) });
 
+const prune = () => shares.pruneEvents(config.eventRetentionDays);
+prune();
+setInterval(prune, 24 * 60 * 60 * 1000).unref();
+
 await listen(broker, config.brokerListen);
 await listen(admin, config.adminListen);
 closeOnSignal(admin, broker);

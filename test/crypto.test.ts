@@ -5,12 +5,18 @@ import {
   encryptedSize,
   encryptStream,
   hashSecret,
+  keyProof,
   passwordVerifier,
   sealMeta,
   Vault,
   verifySecret,
 } from '../src/server/crypto.ts';
-import { passwordVerifier as browserVerifier, decryptStream, openMeta } from '../src/shared/wire.ts';
+import {
+  keyProof as browserProof,
+  passwordVerifier as browserVerifier,
+  decryptStream,
+  openMeta,
+} from '../src/shared/wire.ts';
 
 const key = crypto.randomBytes(32);
 const browserKey = new Uint8Array(key);
@@ -81,15 +87,24 @@ describe('metadata and passwords', () => {
   });
 
   it('derives the same password verifier in the browser and on the server', async () => {
-    expect(await browserVerifier('Pàssword 1', 'xyz')).toBe(await passwordVerifier('Pàssword 1', 'xyz'));
-    expect(await passwordVerifier('a', 'x')).not.toBe(await passwordVerifier('a', 'y'));
+    expect(await browserVerifier('Pàssword 1', browserKey, 'xyz')).toBe(
+      await passwordVerifier('Pàssword 1', key, 'xyz'),
+    );
+    expect(await passwordVerifier('a', key, 'x')).not.toBe(await passwordVerifier('a', key, 'y'));
+    expect(await passwordVerifier('a', key, 'x')).not.toBe(await passwordVerifier('a', crypto.randomBytes(32), 'x'));
   });
 
-  it('hashes secrets with scrypt', () => {
-    const hash = hashSecret('secret');
-    expect(verifySecret(hash, 'secret')).toBe(true);
-    expect(verifySecret(hash, 'other')).toBe(false);
-    expect(verifySecret('garbage', 'secret')).toBe(false);
+  it('derives the same key proof in the browser and on the server, bound to key and id', async () => {
+    expect(await browserProof(browserKey, 'xyz')).toBe(keyProof(key, 'xyz'));
+    expect(keyProof(key, 'xyz')).not.toBe(keyProof(key, 'xyw'));
+    expect(keyProof(key, 'xyz')).not.toBe(keyProof(crypto.randomBytes(32), 'xyz'));
+  });
+
+  it('hashes secrets with scrypt', async () => {
+    const hash = await hashSecret('secret');
+    expect(await verifySecret(hash, 'secret')).toBe(true);
+    expect(await verifySecret(hash, 'other')).toBe(false);
+    expect(await verifySecret('garbage', 'secret')).toBe(false);
   });
 });
 

@@ -62,7 +62,7 @@ export function LinkScreen({ id }: { id: string }) {
   const data: LinkDetail = link.data;
   const changed = data.files.some((file) => file.state === 'changed');
   const downloads = data.maxDownloads
-    ? `${data.counts.downloads} / ${data.maxDownloads}`
+    ? `${data.counts.started} / ${data.maxDownloads}`
     : String(data.counts.downloads);
 
   return (

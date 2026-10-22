@@ -20,8 +20,6 @@ type View =
   | { name: 'password' }
   | { name: 'files'; grant: Grant };
 
-const NO_PASSWORD_VERIFIER = 'A'.repeat(43);
-
 // Kept in memory only: it unlocks this link, so it never touches browser storage.
 let unlockedWith: string | null = null;
 
@@ -31,8 +29,9 @@ const supported = () =>
   typeof TransformStream !== 'undefined' &&
   typeof ReadableStream !== 'undefined';
 
+const parsed = readLink(window.location);
+
 export function App() {
-  const parsed = readLink(window.location);
   const [view, setView] = useState<View>(() =>
     !supported()
       ? { name: 'unsupported' }
@@ -204,7 +203,7 @@ function Files({ link, initial }: { link: LinkRef; initial: Grant }) {
   grantRef.current = grant;
 
   const refreshTicket = useCallback(async () => {
-    const result = await unlockLink(link, unlockedWith ?? NO_PASSWORD_VERIFIER);
+    const result = await unlockLink(link, unlockedWith ?? undefined);
     if (result.kind !== 'granted') return null;
     setGrant(result.grant);
     return result.grant.ticket;

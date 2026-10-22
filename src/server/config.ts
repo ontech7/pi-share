@@ -36,10 +36,12 @@ const schema = z
     CLIENT_IP_HEADER: z.string().default('cf-connecting-ip'),
     COUNTRY_HEADER: z.string().default('cf-ipcountry'),
     ADMIN_ALLOW: list(PRIVATE_NETWORKS),
-    TRUSTED_PROXIES: list(PRIVATE_NETWORKS),
+    TRUSTED_PROXIES: list(),
+    ADMIN_HOSTS: list(),
     ADMIN_LANG: z.enum(['', 'en', 'it']).default(''),
     DEFAULT_EXPIRY_DAYS: z.coerce.number().int().min(0).max(3650).default(7),
     MAX_PASSWORD_FAILURES: z.coerce.number().int().min(1).max(1000).default(10),
+    EVENT_RETENTION_DAYS: z.coerce.number().int().min(1).max(36500).default(365),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'silent']).default('info'),
   })
   .transform((env) => ({
@@ -60,10 +62,12 @@ const schema = z
     countryHeader: env.COUNTRY_HEADER.toLowerCase(),
     adminAllow: env.ADMIN_ALLOW,
     trustedProxies: env.TRUSTED_PROXIES,
+    adminHosts: env.ADMIN_HOSTS.map((host) => host.toLowerCase()),
     lang: env.ADMIN_LANG,
     defaultExpiryDays: env.DEFAULT_EXPIRY_DAYS,
     maxPasswordFailures: env.MAX_PASSWORD_FAILURES,
     logLevel: env.LOG_LEVEL,
+    eventRetentionDays: env.EVENT_RETENTION_DAYS,
   }));
 
 export type Config = z.output<typeof schema>;

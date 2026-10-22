@@ -26,6 +26,8 @@ export function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
 export const metaInfo = 'pi-share/v1/meta';
 export const fileInfo = (linkId: string, part: FilePart) => `pi-share/v1/file/${linkId}/${part}`;
 export const passwordSalt = (linkId: string) => `pi-share/v1/pw/${linkId}`;
+export const passwordInfo = 'pi-share/v1/password';
+export const proofInfo = 'pi-share/v1/proof';
 
 export function recordNonce(counter: number, last: boolean): Uint8Array<ArrayBuffer> {
   const nonce = new Uint8Array(12);
@@ -55,8 +57,32 @@ export async function openMeta<T>(linkKey: Uint8Array<ArrayBuffer>, linkId: stri
   return JSON.parse(new TextDecoder().decode(plain)) as T;
 }
 
-/** Sent instead of the password, so the password itself never leaves the browser. */
-export async function passwordVerifier(password: string, linkId: string): Promise<string> {
+async function hmacWithLinkKey(linkKey: Uint8Array<ArrayBuffer>, info: string, message: Uint8Array<ArrayBuffer>) {
+  const base = await crypto.subtle.importKey('raw', linkKey, 'HKDF', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode(info) },
+    base,
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
+    false,
+    ['sign'],
+  );
+  return toBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, message)));
+}
+
+/** Proves the caller holds the link key, so knowing the link id alone opens nothing and locks nothing. */
+export function keyProof(linkKey: Uint8Array<ArrayBuffer>, linkId: string): Promise<string> {
+  return hmacWithLinkKey(linkKey, proofInfo, encoder.encode(linkId));
+}
+
+/**
+ * Sent instead of the password. Keyed with the link key, so whoever sees it in transit
+ * can neither guess the password offline nor use it on another link.
+ */
+export async function passwordVerifier(
+  password: string,
+  linkKey: Uint8Array<ArrayBuffer>,
+  linkId: string,
+): Promise<string> {
   const base = await crypto.subtle.importKey('raw', encoder.encode(password.normalize('NFC')), 'PBKDF2', false, [
     'deriveBits',
   ]);
@@ -65,7 +91,7 @@ export async function passwordVerifier(password: string, linkId: string): Promis
     base,
     256,
   );
-  return toBase64Url(new Uint8Array(bits));
+  return hmacWithLinkKey(linkKey, passwordInfo, new Uint8Array(bits));
 }
 
 export type WireFailure = 'format' | 'integrity' | 'truncated';

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import type {
   CreateLinkBody,
   EventType,
@@ -12,7 +12,7 @@ import type {
   UpdateLinkBody,
 } from '../shared/api.ts';
 import { createLinkBody, updateLinkBody } from '../shared/api.ts';
-import { hashSecret, passwordVerifier, randomId, type Vault } from './crypto.ts';
+import { hashSecret, keyProof, passwordVerifier, randomId, safeEqual, sha256, type Vault } from './crypto.ts';
 import { type Db, schema } from './db/index.ts';
 import type { SensitiveList } from './sensitive.ts';
 import { type Storage, StorageError, type StoredFile } from './storage.ts';
@@ -53,7 +53,7 @@ export type NewEvent = Visit & {
 
 export type ServableLink = { link: LinkRow; files: (FileRow & { state: LinkFileView['state'] })[]; key: Buffer };
 
-const EMPTY_COUNTS: LinkCounts = { opens: 0, downloads: 0, verified: 0, visitors: 0, failedPasswords: 0 };
+const EMPTY_COUNTS: LinkCounts = { opens: 0, started: 0, downloads: 0, verified: 0, visitors: 0, failedPasswords: 0 };
 
 export type SharesDeps = {
   db: Db;
@@ -71,6 +71,8 @@ export class Shares {
   private readonly sensitive: SensitiveList;
   private readonly publicUrl: string;
   private readonly maxPasswordFailures: number;
+  /** Bumped on every change to links, so cached views of them can tell they are stale. */
+  revision = 0;
 
   constructor(deps: SharesDeps) {
     this.db = deps.db;
@@ -93,7 +95,7 @@ export class Shares {
 
     const id = randomId(16);
     const key = crypto.randomBytes(32);
-    const passwordHash = body.password ? hashSecret(await passwordVerifier(body.password, id)) : null;
+    const passwordHash = body.password ? await hashSecret(await passwordVerifier(body.password, key, id)) : null;
 
     this.db.transaction((tx) => {
       tx.insert(links)
@@ -120,6 +122,7 @@ export class Shares {
         )
         .run();
     });
+    this.revision++;
     return this.detail(id);
   }
 
@@ -159,13 +162,14 @@ export class Shares {
 
   async update(id: string, input: UpdateLinkBody): Promise<LinkDetail> {
     const patch = updateLinkBody.parse(input);
-    this.row(id);
+    const row = this.row(id);
     const changes: Partial<LinkRow> = {};
     if (patch.label !== undefined) changes.label = patch.label;
     if (patch.expiresAt !== undefined) changes.expiresAt = patch.expiresAt;
     if (patch.maxDownloads !== undefined) changes.maxDownloads = patch.maxDownloads;
     if (patch.password !== undefined) {
-      changes.passwordHash = patch.password ? hashSecret(await passwordVerifier(patch.password, id)) : null;
+      const key = this.vault.open(row.sealedKey, id);
+      changes.passwordHash = patch.password ? await hashSecret(await passwordVerifier(patch.password, key, id)) : null;
     }
     if (patch.active !== undefined) {
       changes.active = patch.active;
@@ -185,16 +189,32 @@ export class Shares {
         }
       }
     });
+    this.revision++;
     return this.detail(id);
   }
 
   remove(id: string) {
     this.row(id);
     this.db.delete(links).where(eq(links.id, id)).run();
+    this.revision++;
   }
 
   activeCount(): number {
     return this.list().filter((link) => link.state === 'active').length;
+  }
+
+  find(id: string): LinkRow | undefined {
+    return this.db.select().from(links).where(eq(links.id, id)).get();
+  }
+
+  /** True when the caller derived the proof from the link key, i.e. holds the whole link and not only its id. */
+  holdsKey(link: LinkRow, proof: string | undefined): boolean {
+    return !!proof && safeEqual(proof, keyProof(this.vault.open(link.sealedKey, link.id), link.id));
+  }
+
+  /** Changes whenever the password is set, changed or removed, so older tickets stop working. */
+  passwordGeneration(link: LinkRow): string {
+    return sha256(link.passwordHash ?? '').slice(0, 12);
   }
 
   /** What the broker may serve right now, or why not. */
@@ -235,6 +255,26 @@ export class Shares {
       .get();
   }
 
+  hasResult(linkId: string, downloadId: string): boolean {
+    const row = this.db
+      .select({ id: events.id })
+      .from(events)
+      .where(
+        and(
+          eq(events.linkId, linkId),
+          eq(events.downloadId, downloadId),
+          sql`${events.type} in ('download_verified', 'download_failed')`,
+        ),
+      )
+      .get();
+    return row !== undefined;
+  }
+
+  pruneEvents(olderThanDays: number): number {
+    const cutoff = Date.now() - olderThanDays * 86_400_000;
+    return this.db.delete(events).where(lt(events.at, cutoff)).run().changes;
+  }
+
   hasDownload(linkId: string, downloadId: string): boolean {
     return this.startedDownload(linkId, downloadId) !== undefined;
   }
@@ -253,8 +293,16 @@ export class Shares {
       .set({ failedPasswords: failures, ...(lock ? { lockedAt: Date.now() } : {}) })
       .where(eq(links.id, link.id))
       .run();
-    if (lock) this.record(link.id, { ...visit, type: 'locked', detail: `${failures} wrong passwords` });
+    if (lock) {
+      this.record(link.id, { ...visit, type: 'locked', detail: `${failures} wrong passwords` });
+      this.revision++;
+    }
     return lock;
+  }
+
+  unlocked(link: LinkRow, visit: Visit) {
+    this.record(link.id, { ...visit, type: 'unlocked' });
+    if (link.failedPasswords > 0) this.db.update(links).set({ failedPasswords: 0 }).where(eq(links.id, link.id)).run();
   }
 
   private row(id: string): LinkRow {
@@ -276,8 +324,9 @@ export class Shares {
       .select({
         linkId: events.linkId,
         opens: sql<number>`sum(${events.type} = 'open')`,
+        started: sql<number>`count(distinct case when ${events.type} = 'download_started' then ${events.downloadId} end)`,
         downloads: sql<number>`count(distinct case when ${events.type} = 'download_finished' then ${events.downloadId} end)`,
-        verified: sql<number>`sum(${events.type} = 'download_verified')`,
+        verified: sql<number>`count(distinct case when ${events.type} = 'download_verified' then ${events.downloadId} end)`,
         visitors: sql<number>`count(distinct case when ${events.type} = 'open' then coalesce(${events.visitor}, ${events.ip}) end)`,
         failedPasswords: sql<number>`sum(${events.type} = 'password_failed')`,
         lastActivityAt: sql<number | null>`max(case when ${events.type} != 'preview' then ${events.at} end)`,
@@ -293,7 +342,8 @@ export class Shares {
     if (link.lockedAt) return 'locked';
     if (!link.active) return 'disabled';
     if (link.expiresAt && link.expiresAt <= Date.now()) return 'expired';
-    if (link.maxDownloads && counts.downloads >= link.maxDownloads) return 'exhausted';
+    // Every started download uses up the quota: counting only finished ones lets a client stop one record short.
+    if (link.maxDownloads && counts.started >= link.maxDownloads) return 'exhausted';
     if (!files.some((file) => file.state === 'ok')) return 'unavailable';
     return 'active';
   }

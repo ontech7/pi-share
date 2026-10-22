@@ -287,10 +287,12 @@ try {
 } finally {
   ws.close();
   await Promise.all(
-    processes.map(
-      (child) =>
-        new Promise((resolve) => (child.exitCode !== null ? resolve() : (child.once('exit', resolve), child.kill()))),
-    ),
+    processes.map((child) => {
+      if (child.exitCode !== null) return undefined;
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill();
+      return exited;
+    }),
   );
   fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   fs.rmSync(sockets, { recursive: true, force: true });

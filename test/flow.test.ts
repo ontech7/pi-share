@@ -16,7 +16,7 @@ import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
 import { Storage } from '../src/server/storage.ts';
 import type { LinkDetail, ShareMeta } from '../src/shared/api.ts';
-import { decryptStream, fromBase64Url, openMeta, passwordVerifier, type Sealed } from '../src/shared/wire.ts';
+import { decryptStream, fromBase64Url, keyProof, openMeta, passwordVerifier, type Sealed } from '../src/shared/wire.ts';
 import { tempDir, writeFiles } from './helpers.ts';
 
 const SETUP_CODE = 'ABCDE-12345';
@@ -77,6 +77,19 @@ async function decrypt(body: Buffer, key: Uint8Array<ArrayBuffer>, id: string, p
 const parseLink = (url: string) => {
   const [base, fragment] = url.split('#') as [string, string];
   return { id: base.split('/d/')[1] as string, key: fromBase64Url(fragment) };
+};
+
+const openCall = async (visitor: Visitor, link: LinkDetail) => {
+  const { id, key } = parseLink(link.url);
+  return edgeCall(visitor, 'POST', `/api/links/${id}/open`, { proof: await keyProof(key, id) });
+};
+
+const unlockCall = async (visitor: Visitor, link: LinkDetail, password?: string) => {
+  const { id, key } = parseLink(link.url);
+  return edgeCall(visitor, 'POST', `/api/links/${id}/unlock`, {
+    proof: await keyProof(key, id),
+    verifier: password === undefined ? undefined : await passwordVerifier(password, key, id),
+  });
 };
 
 beforeAll(async () => {
@@ -173,7 +186,7 @@ describe('sharing flow', () => {
 
   it('serves nothing about the files before the password', async () => {
     const visitor = await visit(link.id);
-    const open = await edgeCall(visitor, 'POST', `/api/links/${link.id}/open`);
+    const open = await openCall(visitor, link);
     expect(open.json()).toEqual({ passwordRequired: true });
     const sneaky = await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/0`);
     expect(sneaky.statusCode).toBe(403);
@@ -181,15 +194,11 @@ describe('sharing flow', () => {
 
   it('downloads, decrypts and verifies each file and the zip', async () => {
     const visitor = await visit(link.id);
-    await edgeCall(visitor, 'POST', `/api/links/${link.id}/open`);
-    const wrong = await edgeCall(visitor, 'POST', `/api/links/${link.id}/unlock`, {
-      verifier: await passwordVerifier('nope', link.id),
-    });
+    await openCall(visitor, link);
+    const wrong = await unlockCall(visitor, link, 'nope');
     expect(wrong.statusCode).toBe(403);
 
-    const unlock = await edgeCall(visitor, 'POST', `/api/links/${link.id}/unlock`, {
-      verifier: await passwordVerifier('open sesame', link.id),
-    });
+    const unlock = await unlockCall(visitor, link, 'open sesame');
     expect(unlock.statusCode).toBe(200);
     const { meta, ticket } = unlock.json() as { meta: Sealed; ticket: string };
     const shareMeta = await openMeta<ShareMeta>(key, link.id, meta);
@@ -227,7 +236,7 @@ describe('sharing flow', () => {
 
   it('reports opens, downloads and visitors to the admin', async () => {
     const { body } = await adminCall('GET', `/api/links/${link.id}`);
-    expect(body.counts).toEqual({ opens: 2, downloads: 2, verified: 1, visitors: 2, failedPasswords: 1 });
+    expect(body.counts).toEqual({ opens: 2, started: 2, downloads: 2, verified: 1, visitors: 2, failedPasswords: 1 });
     const started = body.events.find((event: { type: string }) => event.type === 'download_started');
     expect(started).toMatchObject({ ip: '203.0.113.7', country: 'IT', language: 'it-IT,it;q=0.9' });
     expect(started.userAgent).toContain('Windows');
@@ -247,18 +256,15 @@ describe('sharing flow', () => {
   it('stops serving a disabled link and serves it again once re-enabled', async () => {
     const visitor = await visit(link.id);
     await adminCall('PATCH', `/api/links/${link.id}`, { active: false });
-    expect((await edgeCall(visitor, 'POST', `/api/links/${link.id}/open`)).statusCode).toBe(404);
+    expect((await openCall(visitor, link)).statusCode).toBe(404);
     await adminCall('PATCH', `/api/links/${link.id}`, { active: true });
-    expect((await edgeCall(visitor, 'POST', `/api/links/${link.id}/open`)).statusCode).toBe(200);
+    expect((await openCall(visitor, link)).statusCode).toBe(200);
   });
 
   it('locks the link after too many wrong passwords', async () => {
     const visitor = await visit(link.id, { ip: '192.0.2.50' });
-    const verifier = await passwordVerifier('wrong', link.id);
     const statuses = [];
-    for (let i = 0; i < 3; i++) {
-      statuses.push((await edgeCall(visitor, 'POST', `/api/links/${link.id}/unlock`, { verifier })).statusCode);
-    }
+    for (let i = 0; i < 3; i++) statuses.push((await unlockCall(visitor, link, 'wrong')).statusCode);
     expect(statuses).toEqual([403, 403, 404]);
     expect((await adminCall('GET', `/api/links/${link.id}`)).body.state).toBe('locked');
     await adminCall('PATCH', `/api/links/${link.id}`, { active: true });
@@ -272,10 +278,8 @@ describe('sharing flow', () => {
     expect(detail.files.map((file) => file.state)).toEqual(['ok', 'changed']);
 
     const visitor = await visit(link.id);
-    await edgeCall(visitor, 'POST', `/api/links/${link.id}/open`);
-    const unlock = await edgeCall(visitor, 'POST', `/api/links/${link.id}/unlock`, {
-      verifier: await passwordVerifier('open sesame', link.id),
-    });
+    await openCall(visitor, link);
+    const unlock = await unlockCall(visitor, link, 'open sesame');
     const { ticket } = unlock.json() as { ticket: string };
     expect((await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/1`, undefined, ticket)).statusCode).toBe(404);
     expect((await edgeCall(visitor, 'GET', `/api/links/${link.id}/files/all`, undefined, ticket)).statusCode).toBe(404);
@@ -302,9 +306,9 @@ describe('service switch', () => {
     const { body: link } = await adminCall('POST', '/api/links', { files: ['Work/again.txt'] });
     const visitor = await visit(link.id);
 
-    await adminCall('PATCH', '/api/service', { enabled: false });
+    expect((await adminCall('PATCH', '/api/service', { enabled: false })).body).toMatchObject({ enabled: false });
     expect((await edge.inject({ method: 'GET', url: `/d/${link.id}` })).statusCode).toBe(404);
-    expect((await edgeCall(visitor, 'POST', `/api/links/${link.id}/open`)).statusCode).toBe(404);
+    expect((await openCall(visitor, link)).statusCode).toBe(404);
     expect((await edge.inject({ method: 'GET', url: '/sw.js' })).statusCode).toBe(404);
 
     await adminCall('PATCH', '/api/service', { enabled: true, autoOff: true });

@@ -100,7 +100,10 @@ Known limits, by design:
 - The key proof is the same for every request of a link: whoever can read the decrypted traffic of a link
   (the tunnel provider) could replay it to burn the password attempts and lock that link. Such a party can block
   the traffic anyway.
-- The download limit counts every started download, interrupted ones included; "download all" counts as one.
+- The download limit counts downloads the recipient got: complete ones, and interrupted ones that stopped
+  within the last record (64 KiB) of the end. A cancelled or failed download can be retried. Every download
+  starts from the first byte, so stopping early on purpose never yields the end of a file. Downloads in flight
+  hold their place in the quota; "download all" counts as one.
   Per-visitor limits rely on a cookie the visitor can drop; the per-link and global limits do not.
 - A file counts as unchanged while its size and modification time are the same. Someone who can write to the
   disk and restore both after editing could serve new content without the link noticing; that person already

@@ -136,7 +136,52 @@ describe('passwords and tickets', () => {
 });
 
 describe('download limits', () => {
-  it('counts every started download against the limit', async () => {
+  const detail = async (id: string) => (await stack.adminCall('GET', `/api/links/${id}`)).body as LinkDetail;
+  const settled = async (id: string, type: string) => {
+    for (let i = 0; i < 100; i++) {
+      if ((await detail(id)).events.some((event) => event.type === type)) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`no ${type} event`);
+  };
+
+  it('does not count a download the recipient cancelled, so it can be retried', async () => {
+    fs.writeFileSync(path.join(stack.storageRoot, 'Work/big.bin'), Buffer.alloc(32 * 1024 * 1024, 7));
+    const link = await create({ paths: ['Work/big.bin'], maxDownloads: 1 });
+    const visitor = await stack.visit(link.id, '198.51.100.60');
+    const { ticket } = (await stack.open(visitor, link)).json() as { ticket: string };
+
+    const cancelled = await stack.rawDownload(visitor, link.id, entryId(0, ''), ticket);
+    expect(cancelled.statusCode).toBe(200);
+    for await (const _chunk of cancelled.body) break;
+    await settled(link.id, 'download_aborted');
+    let current = await detail(link.id);
+    expect(current.counts).toMatchObject({ started: 1, downloads: 0 });
+    expect(current.state).toBe('active');
+
+    const retry = await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket);
+    expect(retry.statusCode).toBe(200);
+    current = await detail(link.id);
+    expect(current.counts).toMatchObject({ started: 2, downloads: 1 });
+    expect(current.state).toBe('exhausted');
+  });
+
+  it('keeps a place in the quota for downloads in flight', async () => {
+    const link = await create({ paths: ['Work/big.bin'], maxDownloads: 1 });
+    const first = await stack.visit(link.id, '198.51.100.61');
+    const second = await stack.visit(link.id, '198.51.100.62');
+    const { ticket: firstTicket } = (await stack.open(first, link)).json() as { ticket: string };
+    const { ticket: secondTicket } = (await stack.open(second, link)).json() as { ticket: string };
+    const url = `/api/links/${link.id}/files/${entryId(0, '')}`;
+
+    const running = await stack.rawDownload(first, link.id, entryId(0, ''), firstTicket);
+    expect((await stack.call(second, 'GET', url, undefined, secondTicket)).statusCode).toBe(429);
+    running.body.destroy();
+    await settled(link.id, 'download_aborted');
+    expect((await stack.call(second, 'GET', url, undefined, secondTicket)).statusCode).toBe(200);
+  });
+
+  it('counts complete downloads against the limit', async () => {
     const link = await create({ paths: ['Work/b.txt'], maxDownloads: 2 });
     const visitor = await stack.visit(link.id);
     const { ticket } = (await stack.open(visitor, link)).json() as { ticket: string };

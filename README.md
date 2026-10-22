@@ -64,11 +64,11 @@ exactly who opened what and when.
 
 ## Screenshots
 
-| Pick files or folders | Follow every link |
-| --- | --- |
-| <img src="docs/screenshots/picker.png" alt="Picking a folder to share" /> | <img src="docs/screenshots/activity.png" alt="Link detail with counters and activity" /> |
-| **Settings** | **Recipient page** |
-| <img src="docs/screenshots/settings.png" alt="Settings with defaults for new links" /> | <img src="docs/screenshots/folder.png" alt="A shared folder seen by the recipient" /> |
+| Pick files or folders                                                                  | Follow every link                                                                        |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| <img src="docs/screenshots/picker.png" alt="Picking a folder to share" />              | <img src="docs/screenshots/activity.png" alt="Link detail with counters and activity" /> |
+| **Settings**                                                                           | **Recipient page**                                                                       |
+| <img src="docs/screenshots/settings.png" alt="Settings with defaults for new links" /> | <img src="docs/screenshots/folder.png" alt="A shared folder seen by the recipient" />    |
 
 ## Quick start
 
@@ -180,15 +180,15 @@ each has a regression test in [`test/security.test.ts`](test/security.test.ts) o
 
 Every push runs these checks, and they must pass before anything is merged:
 
-| Check | What it covers |
-| --- | --- |
-| **Lint and types** | Biome (recommended rules) and TypeScript strict mode on server, browser and tests |
-| **Unit and integration tests** | Vitest: wire format round trips at every record boundary, tampering and truncation, ZIP64 output checked with `zipfile` and `unzip -t`, path traversal and symlinks, live folders, download limits, the full admin → edge → broker flow over real unix sockets |
-| **Security regression tests** | one test per issue found in the reviews |
-| **Coverage gate** | the build fails under 85% statements / 72% branches of `src/server` and `src/shared` |
-| **End to end in a real browser** | headless Chrome sets up the admin, creates a link, unlocks it, downloads through the service worker and compares the SHA-256 of the saved file with the original, shares a live folder, saves the settings |
-| **CodeQL** | GitHub's security-extended queries, weekly and on every push |
-| **Multi-arch image** | `linux/amd64` and `linux/arm64` |
+| Check                            | What it covers                                                                                                                                                                                                                                                 |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Lint and types**               | Biome (recommended rules) and TypeScript strict mode on server, browser and tests                                                                                                                                                                              |
+| **Unit and integration tests**   | Vitest: wire format round trips at every record boundary, tampering and truncation, ZIP64 output checked with `zipfile` and `unzip -t`, path traversal and symlinks, live folders, download limits, the full admin → edge → broker flow over real unix sockets |
+| **Security regression tests**    | one test per issue found in the reviews                                                                                                                                                                                                                        |
+| **Coverage gate**                | the build fails under 85% statements / 72% branches of `src/server` and `src/shared`                                                                                                                                                                           |
+| **End to end in a real browser** | headless Chrome sets up the admin, creates a link, unlocks it, downloads through the service worker and compares the SHA-256 of the saved file with the original, shares a live folder, saves the settings                                                     |
+| **CodeQL**                       | GitHub's security-extended queries, weekly and on every push                                                                                                                                                                                                   |
+| **Multi-arch image**             | `linux/amd64` and `linux/arm64`                                                                                                                                                                                                                                |
 
 ## Configuration
 

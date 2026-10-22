@@ -14,9 +14,20 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// Only our own pages may hand over a download, and only for one of our download URLs.
+const JOB_URL = /^\/api\/links\/[\w-]{10,64}\/files\/(all|[0-9a-f]{16})$/;
+const LINK_ID = /^[\w-]{10,64}$/;
+
+function isValidJob(job: DownloadJob | undefined): job is DownloadJob {
+  if (!job || typeof job.url !== 'string' || !LINK_ID.test(job.linkId)) return false;
+  const url = new URL(job.url, self.location.origin);
+  return url.origin === self.location.origin && JOB_URL.test(url.pathname) && url.search === '';
+}
+
 self.addEventListener('message', (event) => {
+  if (event.origin && event.origin !== self.location.origin) return;
   const message = event.data as ToWorker;
-  if (message.type !== 'prepare') return;
+  if (message?.type !== 'prepare' || !isValidJob(message.job)) return;
   const client = event.source as Client | null;
   jobs.set(message.job.token, { job: message.job, clientId: client?.id ?? null });
   client?.postMessage({ type: 'ready', token: message.job.token } satisfies FromWorker);
@@ -63,7 +74,10 @@ function startDownload(job: DownloadJob, clientId: string | null) {
       : Promise.resolve();
 
   const response = (async () => {
-    const upstream = await fetch(job.url, { headers: { 'x-ticket': job.ticket }, cache: 'no-store' }).catch(() => null);
+    const upstream = await fetch(new URL(job.url, self.location.origin).pathname, {
+      headers: { 'x-ticket': job.ticket },
+      cache: 'no-store',
+    }).catch(() => null);
     if (!upstream?.ok || !upstream.body) {
       await send({
         type: 'error',

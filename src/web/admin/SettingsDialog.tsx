@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LogOut } from 'lucide-react';
 import { useState } from 'react';
+import type { Preferences } from '../../shared/api.ts';
 import { useI18n } from '../lib/i18n-context.tsx';
 import { Button } from '../ui/Button.tsx';
 import { Dialog } from '../ui/Dialog.tsx';
@@ -8,6 +9,8 @@ import { Field } from '../ui/Field.tsx';
 import { Switch } from '../ui/Switch.tsx';
 import { useToast } from '../ui/Toaster.tsx';
 import { ApiError, api, keys } from './api.ts';
+import { ExpiryPicker } from './create/CreateLinkDialog.tsx';
+import { PolicyPicker } from './create/PolicyPicker.tsx';
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useI18n();
@@ -49,6 +52,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             label={t('settings.autoOff')}
           />
         </section>
+
+        <NewLinkDefaults />
 
         <form
           className="flex flex-col gap-4"
@@ -95,5 +100,56 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         </Button>
       </div>
     </Dialog>
+  );
+}
+
+function NewLinkDefaults() {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const preferences = useQuery({ queryKey: keys.preferences, queryFn: api.preferences });
+  const [limit, setLimit] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (patch: Partial<Preferences>) => api.updatePreferences(patch),
+    onSuccess: (saved) => queryClient.setQueryData(keys.preferences, saved),
+  });
+  const data = preferences.data;
+  if (!data) return null;
+  const shownLimit = limit ?? (data.maxDownloads ? String(data.maxDownloads) : '');
+
+  return (
+    <section className="flex flex-col gap-5">
+      <div>
+        <h3 className="text-sm font-semibold">{t('settings.newLinks')}</h3>
+        <p className="mt-1 text-xs text-muted">{t('settings.newLinksHint')}</p>
+      </div>
+      <PolicyPicker value={data.onChange} onChange={(onChange) => save.mutate({ onChange })} />
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1.5 text-sm font-medium">{t('create.expiry')}</legend>
+        <ExpiryPicker value={data.expiryDays} onChange={(expiryDays) => save.mutate({ expiryDays })} />
+      </fieldset>
+      <Field
+        label={t('create.maxDownloads')}
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={10000}
+        placeholder={t('create.unlimited')}
+        value={shownLimit}
+        onChange={(event) => setLimit(event.target.value.replace(/\D/g, ''))}
+        onBlur={() => {
+          if (limit === null) return;
+          const value = limit ? Math.min(Number(limit), 10_000) : null;
+          save.mutate({ maxDownloads: value || null }, { onSettled: () => setLimit(null) });
+        }}
+      />
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-sm">{t('settings.generatePassword')}</span>
+        <Switch
+          checked={data.generatePassword}
+          onChange={(generatePassword) => save.mutate({ generatePassword })}
+          label={t('settings.generatePassword')}
+        />
+      </div>
+    </section>
   );
 }

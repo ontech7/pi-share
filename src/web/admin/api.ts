@@ -3,6 +3,7 @@ import type {
   CreateLinkBody,
   LinkDetail,
   LinkSummary,
+  Preferences,
   ServiceState,
   SessionState,
   UpdateLinkBody,
@@ -46,6 +47,8 @@ export const api = {
   service: () => request<ServiceState>('GET', '/api/service'),
   updateService: (patch: Partial<Pick<ServiceState, 'enabled' | 'autoOff'>>) =>
     request<ServiceState>('PATCH', '/api/service', patch),
+  preferences: () => request<Preferences>('GET', '/api/preferences'),
+  updatePreferences: (patch: Partial<Preferences>) => request<Preferences>('PATCH', '/api/preferences', patch),
   browse: (path: string) => request<BrowseResult>('GET', `/api/browse?path=${encodeURIComponent(path)}`),
   links: () => request<LinkSummary[]>('GET', '/api/links'),
   link: (id: string) => request<LinkDetail>('GET', `/api/links/${id}`),
@@ -57,6 +60,7 @@ export const api = {
 export const keys = {
   session: ['session'] as const,
   service: ['service'] as const,
+  preferences: ['preferences'] as const,
   links: ['links'] as const,
   link: (id: string) => ['links', id] as const,
   browse: (path: string) => ['browse', path] as const,

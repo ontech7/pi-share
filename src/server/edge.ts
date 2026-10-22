@@ -130,8 +130,9 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
   };
 
   const relayJson = async (reply: FastifyReply, response: Dispatcher.ResponseData, visit: Visit) => {
-    if (response.statusCode === 404) prober.miss(visit.ip);
     const text = await response.body.text();
+    // A 404 that carries a reason went to someone holding the key: not a guess at link ids.
+    if (response.statusCode === 404 && !text.includes('"reason"')) prober.miss(visit.ip);
     return reply
       .code(response.statusCode)
       .type('application/json')
@@ -228,7 +229,7 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
 
   app.get('/api/links/:id/files/:part', async (request, reply) => {
     const { id, part } = request.params as { id: string; part: string };
-    if (!linkId.safeParse(id).success || !/^(all|\d{1,4})$/.test(part)) return reply.code(404).send();
+    if (!linkId.safeParse(id).success || !/^(all|[0-9a-f]{16})$/.test(part)) return reply.code(404).send();
     const visit = visitOf(request);
     const abort = new AbortController();
     reply.raw.on('close', () => {

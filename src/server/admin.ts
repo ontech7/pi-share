@@ -17,6 +17,8 @@ import {
   changePasswordBody,
   createLinkBody,
   loginBody,
+  type Preferences,
+  preferencesBody,
   type ServiceState,
   type SessionState,
   serviceBody,
@@ -145,6 +147,13 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     publicUrl: config.publicUrl,
   });
 
+  const defaults: Preferences = {
+    onChange: 'pause',
+    expiryDays: config.defaultExpiryDays,
+    maxDownloads: null,
+    generatePassword: false,
+  };
+
   app.get('/healthz', async () => ({ ok: true }));
 
   app.get(
@@ -211,11 +220,16 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     async (request) => storage.browse(request.query.path),
   );
 
+  app.get('/api/preferences', async () => settings.preferences(defaults));
+  app.patch('/api/preferences', { schema: { body: preferencesBody } }, async (request) =>
+    settings.updatePreferences(request.body, defaults),
+  );
+
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 
   app.get('/api/links', async () => shares.list());
   app.post('/api/links', { schema: { body: createLinkBody } }, async (request, reply) =>
-    reply.code(201).send(await shares.create(request.body)),
+    reply.code(201).send(await shares.create(request.body, settings.preferences(defaults).onChange)),
   );
   app.get('/api/links/:id', { schema: { params: linkParams } }, async (request) => shares.detail(request.params.id));
   app.patch('/api/links/:id', { schema: { params: linkParams, body: updateLinkBody } }, async (request) =>

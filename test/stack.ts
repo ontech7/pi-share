@@ -35,13 +35,13 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
   });
   const db = openDatabase(config.dbFile);
   const vault = new Vault(loadOrCreateKey(config.masterKeyFile));
-  const storage = new Storage(config.storageRoot, config.deny, config.hideSystem);
+  const storage = new Storage(config.storageRoot, config.deny, config.hideSystem, 0);
   const settings = new Settings(db);
   const shares = new Shares({
     db,
     storage,
     vault,
-    sensitive: new SensitiveList(''),
+    sensitive: new SensitiveList(config.sensitiveFile),
     publicUrl: config.publicUrl,
     maxPasswordFailures: config.maxPasswordFailures,
   });

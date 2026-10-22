@@ -9,6 +9,7 @@ const LINK_TONES: Record<LinkState, Tone> = {
   locked: 'danger',
   exhausted: 'warn',
   unavailable: 'warn',
+  paused: 'warn',
 };
 
 const FILE_TONES: Record<FileState, Tone> = { ok: 'ok', changed: 'warn', missing: 'danger' };

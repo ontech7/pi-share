@@ -3,12 +3,12 @@ import Fastify, { type FastifyReply } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { ShareMeta } from '../shared/api.ts';
-import type { FilePart } from '../shared/wire.ts';
+import type { Entry } from './content.ts';
 import { encryptedSize, encryptStream, randomId, safeEqual, sealMeta, type Vault, verifySecret } from './crypto.ts';
 import type { Settings } from './settings.ts';
 import type { ServableLink, Shares, Visit } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
-import { archiveNames, exactFile, zipSize, zipStream } from './zip.ts';
+import { exactFile, zipSize, zipStream } from './zip.ts';
 
 /** The edge passes what it knows about the visitor in this header, as JSON. */
 export const VISIT_HEADER = 'x-visit';
@@ -82,20 +82,22 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     if (secret && !safeEqual(String(request.headers[SECRET_HEADER] ?? ''), secret)) return reply.code(401).send();
   });
 
-  const unavailable = (reply: FastifyReply) => reply.code(404).send({ error: 'unavailable' });
+  const unavailable = (reply: FastifyReply, reason?: string) =>
+    reply.code(404).send(reason ? { error: 'unavailable', reason } : { error: 'unavailable' });
 
-  const metaOf = ({ link, files }: ServableLink): ShareMeta => {
-    const available = files.filter((file) => file.state === 'ok');
-    const names = archiveNames(available.map((file) => file.name));
+  const metaOf = ({ link, content }: ServableLink): ShareMeta => {
+    const { entries } = content;
+    const folders = content.items.filter((report) => report.item.kind === 'folder');
+    const bundled = entries.length > 1 || folders.length > 0;
+    const fallback = folders.length === 1 && content.items.length === 1 ? (folders[0]?.name as string) : 'files';
     return {
-      files: files.map((file) => ({ name: file.name, size: file.size, available: file.state === 'ok' })),
-      bundle:
-        available.length > 1
-          ? {
-              name: `${(link.label || 'files').replace(/[\\/:*?"<>|]+/g, '_')}.zip`,
-              size: zipSize(available.map((file, i) => ({ name: names[i] as string, size: file.size }))),
-            }
-          : null,
+      entries: entries.map(({ id, path, size }) => ({ id, path, size })),
+      bundle: bundled
+        ? {
+            name: `${(link.label || fallback).replace(/[\\/:*?"<>|]+/g, '_')}.zip`,
+            size: zipSize(entries.map((entry) => ({ name: entry.path, size: entry.size }))),
+          }
+        : null,
       expiresAt: link.expiresAt,
     };
   };
@@ -110,16 +112,19 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     }),
   });
 
-  /** The link, if the caller proved to hold its key and it can be served right now. */
+  /**
+   * The link, if the caller proved to hold its key and it can be served right now. Only someone holding
+   * the key learns why a link is not available (paused, expired...); everyone else sees the same 404.
+   */
   const authorize = (id: string, givenProof: string, visit: Visit) => {
     const link = shares.find(id);
-    if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return null;
+    if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return { ok: false as const };
     const found = shares.servable(id);
     if (!found.ok) {
       shares.record(id, { ...visit, type: 'refused', detail: found.reason });
-      return null;
+      return { ok: false as const, reason: found.reason };
     }
-    return { servable: found.value, visitor: visit.visitor };
+    return { ok: true as const, servable: found.value, visitor: visit.visitor };
   };
 
   const validTicket = (id: string, visit: Visit, header: unknown): boolean => {
@@ -153,7 +158,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   app.post('/links/:id/open', { schema: { params: linkParams, body: z.object({ proof }) } }, async (request, reply) => {
     const visit = visitOf(request.headers);
     const allowed = authorize(request.params.id, request.body.proof, visit);
-    if (!allowed) return unavailable(reply);
+    if (!allowed.ok) return unavailable(reply, allowed.reason);
     shares.record(request.params.id, { ...visit, type: 'open' });
     if (allowed.servable.link.passwordHash) return { passwordRequired: true };
     return grant(allowed.servable, allowed.visitor);
@@ -165,7 +170,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     async (request, reply) => {
       const visit = visitOf(request.headers);
       const allowed = authorize(request.params.id, request.body.proof, visit);
-      if (!allowed) return unavailable(reply);
+      if (!allowed.ok) return unavailable(reply, allowed.reason);
       const { link } = allowed.servable;
       if (!link.passwordHash) return grant(allowed.servable, allowed.visitor);
       if (!request.body.verifier) return reply.code(403).send({ error: 'password_required' });
@@ -190,7 +195,9 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
   app.get(
     '/links/:id/files/:part',
-    { schema: { params: linkParams.extend({ part: z.union([z.literal('all'), z.coerce.number().int().min(0)]) }) } },
+    {
+      schema: { params: linkParams.extend({ part: z.union([z.literal('all'), z.string().regex(/^[0-9a-f]{16}$/)]) }) },
+    },
     async (request, reply) => {
       const { id, part } = request.params;
       const visit = visitOf(request.headers);
@@ -204,11 +211,12 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         shares.record(id, { ...visit, type: 'refused', detail: found.reason });
         return unavailable(reply);
       }
-      const file = part === 'all' ? null : part;
-      const available = found.value.files.filter((entry) => entry.state === 'ok');
-      const selected = part === 'all' ? available : available.filter((entry) => entry.position === part);
-      if (selected.length === 0 || (part === 'all' && selected.length < 2)) {
-        shares.record(id, { ...visit, type: 'refused', file, detail: 'file_unavailable' });
+      const { entries } = found.value.content;
+      const selected = part === 'all' ? entries : entries.filter((entry) => entry.id === part);
+      const single = part === 'all' ? null : (selected[0] ?? null);
+      const target = { file: single?.position ?? null, path: single?.path ?? null };
+      if (selected.length === 0) {
+        shares.record(id, { ...visit, ...target, type: 'refused', detail: 'file_unavailable' });
         return unavailable(reply);
       }
 
@@ -222,27 +230,27 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       }
 
       const abort = new AbortController();
-      const names = archiveNames(selected.map((entry) => entry.name));
+      const opener = (entry: Entry) => () =>
+        storage.open({ path: entry.source, size: entry.size, modifiedAt: entry.modifiedAt });
       let plainSize: number;
       let source: Readable;
       try {
-        if (part === 'all') {
-          const entries = selected.map((entry, i) => ({
-            name: names[i] as string,
+        if (single) {
+          plainSize = single.size;
+          source = exactFile(opener(single)(), single.size, abort.signal);
+        } else {
+          const archive = selected.map((entry) => ({
+            name: entry.path,
             size: entry.size,
             modifiedAt: entry.modifiedAt,
-            open: () => storage.open(entry),
+            open: opener(entry),
           }));
-          plainSize = zipSize(entries);
-          source = zipStream(entries, abort.signal);
-        } else {
-          const entry = selected[0] as (typeof selected)[number];
-          plainSize = entry.size;
-          source = exactFile(storage.open(entry), entry.size, abort.signal);
+          plainSize = zipSize(archive);
+          source = zipStream(archive, abort.signal);
         }
       } catch (error) {
         if (!(error instanceof StorageError)) throw error;
-        shares.record(id, { ...visit, type: 'refused', file, detail: `file_${error.code}` });
+        shares.record(id, { ...visit, ...target, type: 'refused', detail: `file_${error.code}` });
         return unavailable(reply);
       }
 
@@ -257,7 +265,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         clearInterval(watchdog);
         adjust(perLink, id, -1);
         adjust(perVisitor, visitor, -1);
-        shares.record(id, { ...visit, type, file, downloadId, bytes: sent, detail });
+        shares.record(id, { ...visit, ...target, type, downloadId, bytes: sent, detail });
       };
 
       // A client that stops reading would otherwise hold a download slot forever.
@@ -272,11 +280,11 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
       adjust(perLink, id, 1);
       adjust(perVisitor, visitor, 1);
-      shares.record(id, { ...visit, type: 'download_started', file, downloadId, bytes: plainSize });
+      shares.record(id, { ...visit, ...target, type: 'download_started', downloadId, bytes: plainSize });
       source.on('data', (chunk: Buffer) => {
         sent += chunk.length;
       });
-      const encrypted = pipeline(source, encryptStream(found.value.key, id, part as FilePart), (error) => {
+      const encrypted = pipeline(source, encryptStream(found.value.key, id, part), (error) => {
         if (error) settle('download_aborted', error.message);
       });
       encrypted.on('end', () => settle(sent === plainSize ? 'download_finished' : 'download_aborted'));
@@ -314,7 +322,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       shares.record(id, {
         ...visit,
         type: request.body.ok ? 'download_verified' : 'download_failed',
-        file: shares.downloadFile(id, downloadId),
+        ...shares.downloadTarget(id, downloadId),
         downloadId,
         detail: request.body.reason,
       });

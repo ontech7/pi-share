@@ -16,7 +16,7 @@ updates:
     # Every action in one pull request: CI and the release workflow are checked together.
     groups:
       actions:
-        patterns: ['*']
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     target-branch: develop

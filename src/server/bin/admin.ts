@@ -9,6 +9,7 @@ import { SensitiveList } from '../sensitive.ts';
 import { Settings } from '../settings.ts';
 import { Shares } from '../shares.ts';
 import { Storage } from '../storage.ts';
+import { currentVersion, githubLatest, Updates } from '../updates.ts';
 
 const config = loadConfig();
 const db = openDatabase(config.dbFile);
@@ -24,6 +25,18 @@ const shares = new Shares({
   maxPasswordFailures: config.maxPasswordFailures,
 });
 
+const version = currentVersion();
+const updates = new Updates({
+  current: version,
+  fetchLatest: githubLatest(config.updateRepo, `pi-share/${version}`),
+  settings,
+  autoCheckDefault: config.updateCheck,
+  requestDir: config.updateRequestDir,
+  statusDir: config.updateStatusDir,
+});
+setTimeout(() => updates.maybeCheck(), 10_000).unref();
+setInterval(() => updates.maybeCheck(), 60 * 60 * 1000).unref();
+
 const setupCode = settings.hasAdminPassword() ? null : generateSetupCode();
 if (setupCode) console.log(`pi-share: no admin password yet, open the admin and use the setup code ${setupCode}`);
 
@@ -32,6 +45,7 @@ const admin = await buildAdmin({
   shares,
   settings,
   storage,
+  updates,
   setupCode,
   staticRoot: path.resolve(import.meta.dirname, '../../../dist/admin'),
 });
@@ -44,4 +58,4 @@ setInterval(prune, 24 * 60 * 60 * 1000).unref();
 await listen(broker, config.brokerListen);
 await listen(admin, config.adminListen);
 closeOnSignal(admin, broker);
-console.log(`pi-share admin on ${config.adminListen}, broker on ${config.brokerListen}`);
+console.log(`pi-share ${version} admin on ${config.adminListen}, broker on ${config.brokerListen}`);

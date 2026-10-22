@@ -1,0 +1,10 @@
+# Lets the admin hand install requests to the updater on the host and read its progress.
+# docker compose -f compose.yaml -f compose.updater.yaml up -d   (and list both in updater.env's COMPOSE_FILE)
+services:
+  admin:
+    environment:
+      - UPDATE_REQUEST_DIR=/updates/request
+      - UPDATE_STATUS_DIR=/updates/status
+    volumes:
+      - /var/lib/pi-share-update/request:/updates/request
+      - /var/lib/pi-share-update/status:/updates/status:ro

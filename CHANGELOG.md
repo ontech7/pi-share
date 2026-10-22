@@ -3,6 +3,15 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-22
+
+### Added
+
+- The running version next to the logo, and a notice when a newer release is out (checked every few hours, can be
+  turned off).
+- **Settings → Updates**: release notes and one-click installs through an optional updater on the host, which
+  checks the release and the image again, backs up the database and rolls back if the new version is not healthy.
+
 ## [0.3.0] - 2026-10-22
 
 ### Added
@@ -44,6 +53,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Password, expiry, download limit and activity log per link.
 - Service switch; admin on the LAN, network-less edge behind a tunnel.
 
+[0.4.0]: https://github.com/ontech7/pi-share/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ontech7/pi-share/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ontech7/pi-share/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ontech7/pi-share/releases/tag/v0.1.0

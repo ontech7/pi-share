@@ -60,6 +60,38 @@ export const preferencesSchema = z.object({
 });
 export type Preferences = z.infer<typeof preferencesSchema>;
 export const preferencesBody = preferencesSchema.partial();
+export const updateStates = [
+  'queued',
+  'checking',
+  'downloading',
+  'backing_up',
+  'restarting',
+  'done',
+  'failed',
+  'rolled_back',
+] as const;
+export type UpdateState = (typeof updateStates)[number];
+/** States after which the updater on the host is idle again. */
+export const finalUpdateStates: readonly UpdateState[] = ['done', 'failed', 'rolled_back'];
+export type UpdateStatus = { state: UpdateState; version: string; message: string | null; at: number };
+
+export type ReleaseInfo = { version: string; notes: string; url: string; publishedAt: string | null };
+
+export type UpdateInfo = {
+  current: string;
+  latest: ReleaseInfo | null;
+  available: boolean;
+  checkedAt: number | null;
+  error: string | null;
+  autoCheck: boolean;
+  /** Whether an updater runs on the host, so the admin can ask it to install a release. */
+  installable: boolean;
+  status: UpdateStatus | null;
+};
+
+export const updateSettingsBody = z.object({ autoCheck: z.boolean() });
+export const installUpdateBody = z.object({ version: z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,4}$/) });
+
 export const passwordBody = z.object({ password: z.string().min(10).max(256) });
 export const setupBody = passwordBody.extend({ code: z.string().min(1).max(64) });
 export const loginBody = z.object({ password: z.string().min(1).max(256) });

@@ -346,6 +346,12 @@ try {
       return exited;
     }),
   );
-  fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  fs.rmSync(sockets, { recursive: true, force: true });
+  // Chrome's helper processes can still be writing to the profile: leftovers in a temp dir are not a failure.
+  for (const dir of [work, sockets]) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch (error) {
+      console.warn(`could not remove ${dir}: ${error.message}`);
+    }
+  }
 }

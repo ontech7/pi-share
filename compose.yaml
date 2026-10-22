@@ -3,7 +3,7 @@
 name: pi-share
 
 x-hardening: &hardening
-  image: ${PI_SHARE_IMAGE:-ghcr.io/ontech7/pi-share:0.3}
+  image: ${PI_SHARE_IMAGE:-ghcr.io/ontech7/pi-share:0.4}
   restart: unless-stopped
   user: "10001:10001"
   read_only: true

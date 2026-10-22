@@ -1,16 +1,14 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
 import { pipeline, type Readable } from 'node:stream';
 import Fastify, { type FastifyReply } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { ShareMeta } from '../shared/api.ts';
 import type { FilePart } from '../shared/wire.ts';
-import { encryptedSize, encryptStream, randomId, sealMeta, type Vault, verifySecret } from './crypto.ts';
+import { encryptedSize, encryptStream, randomId, safeEqual, sealMeta, type Vault, verifySecret } from './crypto.ts';
 import type { Settings } from './settings.ts';
 import type { ServableLink, Shares, Visit } from './shares.ts';
-import type { Storage } from './storage.ts';
-import { archiveNames, zipSize, zipStream } from './zip.ts';
+import { type Storage, StorageError } from './storage.ts';
+import { archiveNames, exactFile, zipSize, zipStream } from './zip.ts';
 
 /** The edge passes what it knows about the visitor in this header, as JSON. */
 export const VISIT_HEADER = 'x-visit';
@@ -19,20 +17,19 @@ export const SECRET_HEADER = 'x-broker-secret';
 export const DOWNLOAD_ID_HEADER = 'x-download-id';
 
 const TICKET_TTL = 6 * 60 * 60 * 1000;
-const MAX_DOWNLOADS_PER_LINK = 4;
 const MAX_DOWNLOADS = 16;
+const MAX_DOWNLOADS_PER_LINK = 4;
+const MAX_DOWNLOADS_PER_VISITOR = 2;
+const IDLE_TIMEOUT = 60_000;
+const ONLINE_CACHE = 2_000;
+const PREVIEW_INTERVAL = 10_000;
 
-const visitSchema = z.object({
-  ip: z.string().max(64).nullable().optional(),
-  country: z.string().max(8).nullable().optional(),
-  userAgent: z.string().max(1024).nullable().optional(),
-  language: z.string().max(256).nullable().optional(),
-  visitor: z.string().max(64).nullable().optional(),
-});
+const VISIT_LIMITS = { ip: 64, country: 8, userAgent: 512, language: 128, visitor: 64 } as const;
 
-type Ticket = { l: string; v: string | null; exp: number };
+type Ticket = { l: string; v: string; g: string; exp: number };
 
 const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
+const proof = z.string().regex(/^[\w-]{43}$/);
 
 export type BrokerDeps = {
   shares: Shares;
@@ -47,27 +44,43 @@ export function isOnline(shares: Shares, settings: Settings): boolean {
   return service.enabled && (!service.autoOff || shares.activeCount() > 0);
 }
 
+/** Every field cut to size instead of rejected, so an oversized header cannot wipe the visitor from the log. */
+export function visitOf(headers: Record<string, unknown>): Visit {
+  let raw: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(String(headers[VISIT_HEADER] ?? '{}'));
+    if (parsed && typeof parsed === 'object') raw = parsed as Record<string, unknown>;
+  } catch {
+    // keep the empty visit
+  }
+  const visit: Visit = {};
+  for (const [field, limit] of Object.entries(VISIT_LIMITS) as [keyof Visit, number][]) {
+    const value = raw[field];
+    visit[field] = typeof value === 'string' && value ? value.slice(0, limit) : null;
+  }
+  return visit;
+}
+
 export function buildBroker({ shares, settings, storage, vault, secret }: BrokerDeps) {
   const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 16 * 1024 }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
-  const running = new Map<string, number>();
+  const perLink = new Map<string, number>();
+  const checkingPassword = new Set<string>();
+  const perVisitor = new Map<string, number>();
+  const lastPreview = new Map<string, number>();
+  let activeLinks = { value: 0, at: 0, revision: -1 };
+
+  const adjust = (map: Map<string, number>, key: string, delta: number) => {
+    const next = (map.get(key) ?? 0) + delta;
+    if (next > 0) map.set(key, next);
+    else map.delete(key);
+  };
 
   app.addHook('onRequest', async (request, reply) => {
-    if (!secret) return;
-    const given = Buffer.from(String(request.headers[SECRET_HEADER] ?? ''));
-    const expected = Buffer.from(secret);
-    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return reply.code(401).send();
+    if (secret && !safeEqual(String(request.headers[SECRET_HEADER] ?? ''), secret)) return reply.code(401).send();
   });
-
-  const visitOf = (headers: Record<string, unknown>): Visit => {
-    try {
-      return visitSchema.parse(JSON.parse(String(headers[VISIT_HEADER] ?? '{}')));
-    } catch {
-      return {};
-    }
-  };
 
   const unavailable = (reply: FastifyReply) => reply.code(404).send({ error: 'unavailable' });
 
@@ -87,53 +100,91 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     };
   };
 
-  const grant = (servable: ServableLink, visit: Visit) => ({
+  const grant = (servable: ServableLink, visitor: string) => ({
     meta: sealMeta(servable.key, servable.link.id, metaOf(servable)),
-    ticket: vault.signTicket<Ticket>({ l: servable.link.id, v: visit.visitor ?? null, exp: Date.now() + TICKET_TTL }),
+    ticket: vault.signTicket<Ticket>({
+      l: servable.link.id,
+      v: visitor,
+      g: shares.passwordGeneration(servable.link),
+      exp: Date.now() + TICKET_TTL,
+    }),
   });
 
-  app.get('/state', async () => ({ online: isOnline(shares, settings) }));
+  /** The link, if the caller proved to hold its key and it can be served right now. */
+  const authorize = (id: string, givenProof: string, visit: Visit) => {
+    const link = shares.find(id);
+    if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return null;
+    const found = shares.servable(id);
+    if (!found.ok) {
+      shares.record(id, { ...visit, type: 'refused', detail: found.reason });
+      return null;
+    }
+    return { servable: found.value, visitor: visit.visitor };
+  };
+
+  const validTicket = (id: string, visit: Visit, header: unknown): boolean => {
+    const ticket = vault.readTicket<Ticket>(typeof header === 'string' ? header : undefined);
+    const link = shares.find(id);
+    if (!ticket || !link || ticket.l !== id || !visit.visitor || ticket.v !== visit.visitor) return false;
+    return ticket.g === shares.passwordGeneration(link);
+  };
+
+  // The switch applies at once; only the count of active links (it stats every shared file) is cached.
+  app.get('/state', async () => {
+    const service = settings.service();
+    if (!service.enabled) return { online: false };
+    if (!service.autoOff) return { online: true };
+    if (Date.now() - activeLinks.at > ONLINE_CACHE || activeLinks.revision !== shares.revision) {
+      activeLinks = { value: shares.activeCount(), at: Date.now(), revision: shares.revision };
+    }
+    return { online: activeLinks.value > 0 };
+  });
 
   app.post('/links/:id/preview', { schema: { params: linkParams } }, async (request, reply) => {
-    const found = shares.servable(request.params.id);
-    if (found.ok || found.reason !== 'not_found') {
-      shares.record(request.params.id, { ...visitOf(request.headers), type: 'preview' });
+    const { id } = request.params;
+    const now = Date.now();
+    if (shares.find(id) && now - (lastPreview.get(id) ?? 0) > PREVIEW_INTERVAL) {
+      lastPreview.set(id, now);
+      shares.record(id, { ...visitOf(request.headers), type: 'preview' });
     }
     return reply.code(204).send();
   });
 
-  app.post('/links/:id/open', { schema: { params: linkParams } }, async (request, reply) => {
+  app.post('/links/:id/open', { schema: { params: linkParams, body: z.object({ proof }) } }, async (request, reply) => {
     const visit = visitOf(request.headers);
-    const found = shares.servable(request.params.id);
-    if (!found.ok) {
-      if (found.reason !== 'not_found')
-        shares.record(request.params.id, { ...visit, type: 'refused', detail: found.reason });
-      return unavailable(reply);
-    }
+    const allowed = authorize(request.params.id, request.body.proof, visit);
+    if (!allowed) return unavailable(reply);
     shares.record(request.params.id, { ...visit, type: 'open' });
-    if (found.value.link.passwordHash) return { passwordRequired: true };
-    return grant(found.value, visit);
+    if (allowed.servable.link.passwordHash) return { passwordRequired: true };
+    return grant(allowed.servable, allowed.visitor);
   });
 
   app.post(
     '/links/:id/unlock',
-    { schema: { params: linkParams, body: z.object({ verifier: z.string().regex(/^[\w-]{43}$/) }) } },
+    { schema: { params: linkParams, body: z.object({ proof, verifier: proof.optional() }) } },
     async (request, reply) => {
       const visit = visitOf(request.headers);
-      const found = shares.servable(request.params.id);
-      if (!found.ok) {
-        if (found.reason !== 'not_found')
-          shares.record(request.params.id, { ...visit, type: 'refused', detail: found.reason });
-        return unavailable(reply);
+      const allowed = authorize(request.params.id, request.body.proof, visit);
+      if (!allowed) return unavailable(reply);
+      const { link } = allowed.servable;
+      if (!link.passwordHash) return grant(allowed.servable, allowed.visitor);
+      if (!request.body.verifier) return reply.code(403).send({ error: 'password_required' });
+      // One scrypt per link at a time: bursts cannot outrun the lockout nor fill the thread pool used by downloads.
+      if (checkingPassword.has(link.id)) return reply.code(429).send({ error: 'busy' });
+      checkingPassword.add(link.id);
+      let correct: boolean;
+      try {
+        correct = await verifySecret(link.passwordHash, request.body.verifier);
+      } finally {
+        checkingPassword.delete(link.id);
       }
-      const { link } = found.value;
-      if (!link.passwordHash) return grant(found.value, visit);
-      if (!verifySecret(link.passwordHash, request.body.verifier)) {
+      if (!correct) {
         const locked = shares.failPassword(link, visit);
         return reply.code(locked ? 404 : 403).send({ error: locked ? 'unavailable' : 'wrong_password' });
       }
-      shares.record(link.id, { ...visit, type: 'unlocked' });
-      return grant(found.value, visit);
+      if (shares.find(link.id)?.lockedAt) return unavailable(reply);
+      shares.unlocked(link, visit);
+      return grant(allowed.servable, allowed.visitor);
     },
   );
 
@@ -143,59 +194,84 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     async (request, reply) => {
       const { id, part } = request.params;
       const visit = visitOf(request.headers);
-      const ticket = vault.readTicket<Ticket>(request.headers[TICKET_HEADER] as string | undefined);
-      if (!ticket || ticket.l !== id || ticket.v !== (visit.visitor ?? null))
+      const visitor = visit.visitor;
+      if (!visitor || !validTicket(id, visit, request.headers[TICKET_HEADER])) {
         return reply.code(403).send({ error: 'ticket' });
+      }
 
       const found = shares.servable(id);
       if (!found.ok) {
-        if (found.reason !== 'not_found') shares.record(id, { ...visit, type: 'refused', detail: found.reason });
+        shares.record(id, { ...visit, type: 'refused', detail: found.reason });
         return unavailable(reply);
       }
-      const available = found.value.files.filter((file) => file.state === 'ok');
-      const selected = part === 'all' ? available : available.filter((file) => file.position === part);
+      const file = part === 'all' ? null : part;
+      const available = found.value.files.filter((entry) => entry.state === 'ok');
+      const selected = part === 'all' ? available : available.filter((entry) => entry.position === part);
       if (selected.length === 0 || (part === 'all' && selected.length < 2)) {
-        shares.record(id, {
-          ...visit,
-          type: 'refused',
-          file: part === 'all' ? null : part,
-          detail: 'file_unavailable',
-        });
+        shares.record(id, { ...visit, type: 'refused', file, detail: 'file_unavailable' });
         return unavailable(reply);
       }
 
-      const busy = running.get(id) ?? 0;
-      const total = [...running.values()].reduce((sum, n) => sum + n, 0);
-      if (busy >= MAX_DOWNLOADS_PER_LINK || total >= MAX_DOWNLOADS) return reply.code(429).send({ error: 'busy' });
-
-      const absolute = selected.map((file) => ({ ...file, absolute: storage.file(file.path).absolute }));
-      const names = archiveNames(absolute.map((file) => file.name));
-      const plainSize =
-        part === 'all'
-          ? zipSize(absolute.map((file, i) => ({ name: names[i] as string, size: file.size })))
-          : (absolute[0]?.size ?? 0);
+      const total = [...perLink.values()].reduce((sum, n) => sum + n, 0);
+      if (
+        total >= MAX_DOWNLOADS ||
+        (perLink.get(id) ?? 0) >= MAX_DOWNLOADS_PER_LINK ||
+        (perVisitor.get(visitor) ?? 0) >= MAX_DOWNLOADS_PER_VISITOR
+      ) {
+        return reply.code(429).send({ error: 'busy' });
+      }
 
       const abort = new AbortController();
-      const source: Readable =
-        part === 'all'
-          ? zipStream(
-              absolute.map((file, i) => ({ ...file, name: names[i] as string })),
-              abort.signal,
-            )
-          : fs.createReadStream((absolute[0] as { absolute: string }).absolute, { signal: abort.signal });
+      const names = archiveNames(selected.map((entry) => entry.name));
+      let plainSize: number;
+      let source: Readable;
+      try {
+        if (part === 'all') {
+          const entries = selected.map((entry, i) => ({
+            name: names[i] as string,
+            size: entry.size,
+            modifiedAt: entry.modifiedAt,
+            open: () => storage.open(entry),
+          }));
+          plainSize = zipSize(entries);
+          source = zipStream(entries, abort.signal);
+        } else {
+          const entry = selected[0] as (typeof selected)[number];
+          plainSize = entry.size;
+          source = exactFile(storage.open(entry), entry.size, abort.signal);
+        }
+      } catch (error) {
+        if (!(error instanceof StorageError)) throw error;
+        shares.record(id, { ...visit, type: 'refused', file, detail: `file_${error.code}` });
+        return unavailable(reply);
+      }
 
       const downloadId = randomId(9);
-      const file = part === 'all' ? null : part;
       let sent = 0;
       let settled = false;
+      let sentAtLastCheck = -1;
+
       const settle = (type: 'download_finished' | 'download_aborted', detail?: string) => {
         if (settled) return;
         settled = true;
-        running.set(id, (running.get(id) ?? 1) - 1);
+        clearInterval(watchdog);
+        adjust(perLink, id, -1);
+        adjust(perVisitor, visitor, -1);
         shares.record(id, { ...visit, type, file, downloadId, bytes: sent, detail });
       };
 
-      running.set(id, busy + 1);
+      // A client that stops reading would otherwise hold a download slot forever.
+      const watchdog = setInterval(() => {
+        if (sent === sentAtLastCheck) {
+          abort.abort();
+          reply.raw.destroy();
+          settle('download_aborted', 'idle');
+        }
+        sentAtLastCheck = sent;
+      }, IDLE_TIMEOUT);
+
+      adjust(perLink, id, 1);
+      adjust(perVisitor, visitor, 1);
       shares.record(id, { ...visit, type: 'download_started', file, downloadId, bytes: plainSize });
       source.on('data', (chunk: Buffer) => {
         sent += chunk.length;
@@ -231,9 +307,10 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     async (request, reply) => {
       const { id, downloadId } = request.params;
       const visit = visitOf(request.headers);
-      const ticket = vault.readTicket<Ticket>(request.headers[TICKET_HEADER] as string | undefined);
-      if (!ticket || ticket.l !== id) return reply.code(403).send({ error: 'ticket' });
-      if (!shares.hasDownload(id, downloadId)) return reply.code(404).send({ error: 'unknown_download' });
+      if (!validTicket(id, visit, request.headers[TICKET_HEADER])) return reply.code(403).send({ error: 'ticket' });
+      if (!shares.startedBy(id, downloadId, visit.visitor) || shares.hasResult(id, downloadId)) {
+        return reply.code(404).send({ error: 'unknown_download' });
+      }
       shares.record(id, {
         ...visit,
         type: request.body.ok ? 'download_verified' : 'download_failed',

@@ -44,12 +44,12 @@ export class Settings {
     return this.get<string | null>('adminPasswordHash', null) !== null;
   }
 
-  setAdminPassword(password: string) {
-    this.set('adminPasswordHash', hashSecret(password));
+  async setAdminPassword(password: string) {
+    this.set('adminPasswordHash', await hashSecret(password));
     this.db.delete(sessions).run();
   }
 
-  checkAdminPassword(password: string): boolean {
+  checkAdminPassword(password: string): Promise<boolean> {
     return verifySecret(this.get<string | null>('adminPasswordHash', null), password);
   }
 

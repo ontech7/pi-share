@@ -14,7 +14,12 @@ describe('zip', () => {
     const entries = ['a.txt', 'empty.bin', 'dir/è big.bin'].map((relative) => {
       const absolute = path.join(root, relative);
       const stat = fs.statSync(absolute);
-      return { name: path.basename(relative), absolute, size: stat.size, modifiedAt: stat.mtimeMs };
+      return {
+        name: path.basename(relative),
+        size: stat.size,
+        modifiedAt: stat.mtimeMs,
+        open: () => fs.openSync(absolute, 'r'),
+      };
     });
 
     const chunks: Buffer[] = [];

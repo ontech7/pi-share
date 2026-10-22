@@ -64,6 +64,7 @@ export type LinkFileView = { position: number; path: string; name: string; size:
 
 export type LinkCounts = {
   opens: number;
+  started: number;
   downloads: number;
   verified: number;
   visitors: number;

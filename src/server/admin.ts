@@ -65,7 +65,7 @@ export function generateSetupCode(): string {
 export async function buildAdmin({ config, shares, settings, storage, setupCode, staticRoot }: AdminDeps) {
   const app = Fastify({
     logger: { level: config.logLevel },
-    trustProxy: config.trustedProxies,
+    trustProxy: config.trustedProxies.length ? config.trustedProxies : false,
     bodyLimit: 64 * 1024,
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
@@ -96,11 +96,17 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
 
   app.addHook('onRequest', async (request, reply) => {
     if (!isAllowed(allowed, request.ip)) return reply.code(403).send({ error: 'forbidden_network' });
-    if (!request.url.startsWith('/api/')) return;
+    const host = (request.headers.host ?? '').replace(/:\d+$/, '').toLowerCase();
+    if (config.adminHosts.length && !config.adminHosts.includes(host))
+      return reply.code(421).send({ error: 'wrong_host' });
+
+    // Decide on the route that matched, never on the raw URL: "/%61pi/links" routes to "/api/links".
+    // Unmatched URLs only ever get the SPA shell or a 404, never data.
+    const route = request.routeOptions.url;
+    if (!route?.startsWith('/api/')) return;
     reply.header('cache-control', 'no-store');
     if (request.method !== 'GET' && request.headers[CSRF_HEADER] !== '1')
       return reply.code(403).send({ error: 'csrf' });
-    const route = request.url.split('?')[0] as string;
     if (!OPEN_ROUTES.has(route) && !settings.isValidSession(request.cookies[SESSION_COOKIE])) {
       return reply.code(401).send({ error: 'unauthenticated' });
     }
@@ -158,8 +164,8 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
       if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
         return reply.code(403).send({ error: 'wrong_code' });
       }
-      settings.setAdminPassword(request.body.password);
       pendingSetupCode = null;
+      await settings.setAdminPassword(request.body.password);
       startSession(request, reply);
       return { ok: true };
     },
@@ -169,7 +175,8 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
     '/api/login',
     { schema: { body: loginBody }, config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } },
     async (request, reply) => {
-      if (!settings.checkAdminPassword(request.body.password)) return reply.code(403).send({ error: 'wrong_password' });
+      if (!(await settings.checkAdminPassword(request.body.password)))
+        return reply.code(403).send({ error: 'wrong_password' });
       startSession(request, reply);
       return { ok: true };
     },
@@ -182,8 +189,9 @@ export async function buildAdmin({ config, shares, settings, storage, setupCode,
   });
 
   app.post('/api/password', { schema: { body: changePasswordBody } }, async (request, reply) => {
-    if (!settings.checkAdminPassword(request.body.current)) return reply.code(403).send({ error: 'wrong_password' });
-    settings.setAdminPassword(request.body.password);
+    if (!(await settings.checkAdminPassword(request.body.current)))
+      return reply.code(403).send({ error: 'wrong_password' });
+    await settings.setAdminPassword(request.body.password);
     startSession(request, reply);
     return { ok: true };
   });

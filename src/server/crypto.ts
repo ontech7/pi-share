@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Transform } from 'node:stream';
+import { promisify } from 'node:util';
 import {
   type FilePart,
   fileInfo,
@@ -9,7 +10,9 @@ import {
   MAGIC,
   metaInfo,
   PBKDF2_ITERATIONS,
+  passwordInfo,
   passwordSalt,
+  proofInfo,
   RECORD_SIZE,
   recordNonce,
   type Sealed,
@@ -78,28 +81,47 @@ export function encryptedSize(plainSize: number, recordSize = RECORD_SIZE): numb
   return HEADER_SIZE + plainSize + records * TAG_SIZE;
 }
 
-export function passwordVerifier(password: string, linkId: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    crypto.pbkdf2(password.normalize('NFC'), passwordSalt(linkId), PBKDF2_ITERATIONS, 32, 'sha256', (error, key) =>
-      error ? reject(error) : resolve(key.toString('base64url')),
-    );
-  });
+const pbkdf2 = promisify(crypto.pbkdf2);
+const scrypt = promisify(crypto.scrypt) as (
+  password: crypto.BinaryLike,
+  salt: crypto.BinaryLike,
+  length: number,
+  options: crypto.ScryptOptions,
+) => Promise<Buffer>;
+
+const linkHmac = (linkKey: Buffer, info: string, message: Buffer | string) =>
+  crypto
+    .createHmac('sha256', hkdf(linkKey, Buffer.alloc(0), info))
+    .update(message)
+    .digest('base64url');
+
+export const keyProof = (linkKey: Buffer, linkId: string) => linkHmac(linkKey, proofInfo, linkId);
+
+export function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+export async function passwordVerifier(password: string, linkKey: Buffer, linkId: string): Promise<string> {
+  const bits = await pbkdf2(password.normalize('NFC'), passwordSalt(linkId), PBKDF2_ITERATIONS, 32, 'sha256');
+  return linkHmac(linkKey, passwordInfo, bits);
 }
 
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
-export function hashSecret(secret: string): string {
+export async function hashSecret(secret: string): Promise<string> {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(secret, salt, 32, SCRYPT);
+  const hash = await scrypt(secret, salt, 32, SCRYPT);
   return ['scrypt', SCRYPT.N, SCRYPT.r, SCRYPT.p, salt.toString('base64url'), hash.toString('base64url')].join('$');
 }
 
-export function verifySecret(stored: string | null, secret: string): boolean {
+export async function verifySecret(stored: string | null, secret: string): Promise<boolean> {
   const match = /^scrypt\$(\d+)\$(\d+)\$(\d+)\$([\w-]+)\$([\w-]+)$/.exec(stored ?? '');
   if (!match) return false;
   const [, N, r, p, salt, hash] = match as unknown as [string, string, string, string, string, string];
   const expected = Buffer.from(hash, 'base64url');
-  const actual = crypto.scryptSync(secret, Buffer.from(salt, 'base64url'), expected.length, {
+  const actual = await scrypt(secret, Buffer.from(salt, 'base64url'), expected.length, {
     N: Number(N),
     r: Number(r),
     p: Number(p),

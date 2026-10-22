@@ -7,3 +7,4 @@ dev/data/
 dist/
 .env
 e2e/.out/
+coverage/

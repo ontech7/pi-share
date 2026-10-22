@@ -37,6 +37,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # Only for the labels: org.opencontainers.image.version is the bare version, as the updater expects.
+          tags: type=semver,pattern={{version}}
       - id: build
         uses: docker/build-push-action@v6
         with:

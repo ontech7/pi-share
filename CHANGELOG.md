@@ -3,6 +3,13 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-10-22
+
+### Fixed
+
+- The image's version label is the bare version (`0.4.1`, not `v0.4.1`), so the updater accepts it; it also
+  accepts 0.4.0's.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added
@@ -53,6 +60,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Password, expiry, download limit and activity log per link.
 - Service switch; admin on the LAN, network-less edge behind a tunnel.
 
+[0.4.1]: https://github.com/ontech7/pi-share/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ontech7/pi-share/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ontech7/pi-share/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ontech7/pi-share/compare/v0.1.0...v0.2.0

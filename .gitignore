@@ -4,3 +4,6 @@ dev/data/
 *.secret
 *.env
 .DS_Store
+dist/
+.env
+e2e/.out/

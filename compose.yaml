@@ -1,0 +1,62 @@
+# pi-share: admin (LAN only) + edge (the only public part, without any network).
+# Copy .env.example to .env and adjust the paths before `docker compose up -d`.
+name: pi-share
+
+x-hardening: &hardening
+  image: ${PI_SHARE_IMAGE:-pi-share:local}
+  restart: unless-stopped
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=16m"]
+
+services:
+  admin:
+    <<: *hardening
+    command: ["node", "src/server/bin/admin.ts"]
+    environment:
+      - STORAGE_ROOT=/storage
+      - DATA_DIR=/data
+      - PUBLIC_URL=${PUBLIC_URL}
+      - ADMIN_LISTEN=0.0.0.0:8080
+      - BROKER_LISTEN=unix:/run/pi-share/broker/broker.sock
+      - DENY_PATHS=${DENY_PATHS:-}
+      - SENSITIVE_FILE=${SENSITIVE_FILE:-}
+      - ADMIN_LANG=${ADMIN_LANG:-}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ${STORAGE_PATH}:/storage:ro
+      - ${DATA_PATH}:/data
+      - ${SOCKET_PATH:-/run/pi-share}/broker:/run/pi-share/broker
+    ports:
+      # LAN only: put it behind your reverse proxy or bind it to a private address
+      - ${ADMIN_BIND:-127.0.0.1}:8080:8080
+    healthcheck:
+      test: ["CMD", "node", "src/server/bin/healthcheck.ts", "127.0.0.1:8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  edge:
+    <<: *hardening
+    command: ["node", "src/server/bin/edge.ts"]
+    # no network at all: it talks to the broker and to the tunnel through unix sockets only
+    network_mode: none
+    environment:
+      - PUBLIC_URL=${PUBLIC_URL}
+      - PUBLIC_LISTEN=unix:/run/pi-share/edge/edge.sock
+      - BROKER_URL=unix:/run/pi-share/broker/broker.sock
+      - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-cf-connecting-ip}
+      - COUNTRY_HEADER=${COUNTRY_HEADER:-cf-ipcountry}
+    volumes:
+      - ${SOCKET_PATH:-/run/pi-share}/broker:/run/pi-share/broker
+      - ${SOCKET_PATH:-/run/pi-share}/edge:/run/pi-share/edge
+    depends_on:
+      admin:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "src/server/bin/healthcheck.ts", "unix:/run/pi-share/edge/edge.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

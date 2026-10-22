@@ -66,7 +66,7 @@ class Prober {
   }
 }
 
-export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheMs = 3000 }: EdgeDeps) {
+export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheMs = 1000 }: EdgeDeps) {
   const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 4 * 1024, trustProxy: false });
   const broker = brokerDispatcher(config.brokerUrl);
   const prober = new Prober();

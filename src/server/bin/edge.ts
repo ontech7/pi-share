@@ -10,6 +10,6 @@ const edge = await buildEdge({
   staticRoot: path.resolve(import.meta.dirname, '../../../dist/share'),
 });
 
-await listen(edge, config.publicListen, 0o666);
+await listen(edge, config.publicListen);
 closeOnSignal(edge);
 console.log(`pi-share edge on ${config.publicListen}`);

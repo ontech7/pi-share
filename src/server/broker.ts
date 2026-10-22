@@ -79,6 +79,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   const perLink = new Map<string, number>();
   const checkingPassword = new Set<string>();
   const perVisitor = new Map<string, number>();
+  /** Visitors with a download in flight, per link: `${link} ${visitor}` → downloads. */
+  const inFlight = new Map<string, number>();
   const lastPreview = new Map<string, number>();
   let activeLinks = { value: 0, at: 0, revision: -1 };
 
@@ -129,7 +131,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   const authorize = (id: string, givenProof: string, visit: Visit) => {
     const link = shares.find(id);
     if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return { ok: false as const };
-    const found = shares.servable(id);
+    const found = shares.servable(id, visit.visitor);
     if (!found.ok) {
       shares.record(id, { ...visit, type: 'refused', detail: found.reason });
       return { ok: false as const, reason: found.reason };
@@ -216,7 +218,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         return reply.code(403).send({ error: 'ticket' });
       }
 
-      const found = shares.servable(id);
+      const found = shares.servable(id, visitor);
       if (!found.ok) {
         shares.record(id, { ...visit, type: 'refused', detail: found.reason });
         // The ticket already proves the key: tell why, so retries are not counted as guesses.
@@ -239,10 +241,17 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       ) {
         return reply.code(429).send({ error: 'busy' });
       }
-      // Downloads in flight hold their place in the quota, so parallel ones cannot go past it.
+      // Someone new downloading holds a place in the limit until they finish, so parallel newcomers cannot
+      // go past it. People who already got the files never need a place.
       const { maxDownloads } = found.value.link;
-      if (maxDownloads && found.value.counts.downloads + (perLink.get(id) ?? 0) >= maxDownloads) {
-        return reply.code(429).send({ error: 'busy' });
+      if (maxDownloads && !shares.isRecipient(id, visitor)) {
+        const newcomers = [...inFlight.keys()]
+          .filter((key) => key.startsWith(`${id} `))
+          .map((key) => key.slice(id.length + 1))
+          .filter((other) => other !== visitor && !shares.isRecipient(id, other));
+        if (found.value.counts.recipients + newcomers.length >= maxDownloads) {
+          return reply.code(429).send({ error: 'busy' });
+        }
       }
 
       const abort = new AbortController();
@@ -282,6 +291,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         clearInterval(watchdog);
         adjust(perLink, id, -1);
         adjust(perVisitor, visitor, -1);
+        adjust(inFlight, `${id} ${visitor}`, -1);
         const finished = type === 'download_finished';
         shares.record(id, {
           ...visit,
@@ -306,6 +316,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
       adjust(perLink, id, 1);
       adjust(perVisitor, visitor, 1);
+      adjust(inFlight, `${id} ${visitor}`, 1);
       shares.record(id, { ...visit, ...target, type: 'download_started', downloadId, bytes: plainSize });
       source.on('data', (chunk: Buffer) => {
         sent += chunk.length;

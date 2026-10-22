@@ -100,6 +100,8 @@ export type LinkCounts = {
   opens: number;
   started: number;
   downloads: number;
+  /** Distinct visitors who got the files at least once: what the download limit counts. */
+  recipients: number;
   verified: number;
   visitors: number;
   failedPasswords: number;

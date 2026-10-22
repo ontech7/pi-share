@@ -1,0 +1,10 @@
+node_modules/
+data/
+dev/data/
+*.secret
+*.env
+.DS_Store
+dist/
+.env
+e2e/.out/
+coverage/

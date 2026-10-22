@@ -1,0 +1,11 @@
+.git
+.github
+.claude
+node_modules
+dist
+data
+e2e
+docs
+*.secret
+*.env
+.env

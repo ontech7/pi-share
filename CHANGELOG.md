@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-22
+
+### Added
+
+- **Container images** for `amd64` and `arm64` on `ghcr.io/ontech7/pi-share`, built natively for each platform on
+  every release, with a signed build provenance attestation. Installing no longer needs a clone or a local build.
+- The running version is shown in the settings.
+- MIT license.
+
+### Changed
+
+- `compose.yaml` runs the published image by default (`PI_SHARE_IMAGE` picks another one).
+
+### Security
+
+- Hardening from the first CodeQL analysis: the service worker accepts download jobs only from its own origin and
+  only for pi-share download URLs, the sensitive list is read through a single descriptor, the master key is
+  created without a check-then-use race.
+
 ## [0.2.0] - 2026-10-22
 
 ### Added
@@ -38,5 +57,6 @@ All notable changes to this project are documented here. The format follows
 First release: end-to-end encrypted links to files on your disk, password, expiry and download limit per link,
 activity log, service switch, admin on the LAN, edge without network behind a tunnel.
 
+[0.3.0]: https://github.com/ontech7/pi-share/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ontech7/pi-share/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ontech7/pi-share/releases/tag/v0.1.0

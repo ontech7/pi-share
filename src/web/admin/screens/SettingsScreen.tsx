@@ -63,6 +63,7 @@ export function SettingsScreen({ section }: { section?: string }) {
               </Link>
             ))}
           </Card>
+          <p className="mt-4 text-center font-mono text-xs text-muted md:hidden">pi-share v{__APP_VERSION__}</p>
           <ul className="sticky top-24 flex flex-col gap-1 max-md:hidden">
             {SECTIONS.map(({ id, icon: Icon, title }) => {
               const active = id === shown.id;
@@ -82,6 +83,7 @@ export function SettingsScreen({ section }: { section?: string }) {
                 </li>
               );
             })}
+            <li className="mt-4 px-3 font-mono text-xs text-muted">pi-share v{__APP_VERSION__}</li>
           </ul>
         </nav>
 

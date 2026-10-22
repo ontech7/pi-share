@@ -239,7 +239,15 @@ describe('sharing flow', () => {
 
   it('reports opens, downloads and visitors to the admin', async () => {
     const { body } = await adminCall('GET', `/api/links/${link.id}`);
-    expect(body.counts).toEqual({ opens: 2, started: 2, downloads: 2, verified: 1, visitors: 2, failedPasswords: 1 });
+    expect(body.counts).toEqual({
+      opens: 2,
+      started: 2,
+      downloads: 2,
+      recipients: 1,
+      verified: 1,
+      visitors: 2,
+      failedPasswords: 1,
+    });
     const started = body.events.find((event: { type: string }) => event.type === 'download_started');
     expect(started).toMatchObject({ ip: '203.0.113.7', country: 'IT', language: 'it-IT,it;q=0.9' });
     expect(started.userAgent).toContain('Windows');

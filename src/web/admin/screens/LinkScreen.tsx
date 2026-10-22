@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CirclePause, FileText, Folder, Lock, LockOpen, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  CirclePause,
+  FileText,
+  Folder,
+  Lock,
+  LockOpen,
+  Pencil,
+  RefreshCw,
+  Trash2,
+  Users,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import type { ChangeView, LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
@@ -82,9 +93,7 @@ export function LinkScreen({ id }: { id: string }) {
 
   const data: LinkDetail = link.data;
   const changed = data.changes.length > 0;
-  const downloads = data.maxDownloads
-    ? `${data.counts.downloads} / ${data.maxDownloads}`
-    : String(data.counts.downloads);
+  const downloads = String(data.counts.downloads);
 
   return (
     <div className="flex animate-enter flex-col gap-8">
@@ -105,6 +114,12 @@ export function LinkScreen({ id }: { id: string }) {
               <span>
                 {t('detail.expires')} {data.expiresAt ? formatDate(data.expiresAt, lang) : t('common.never')}
               </span>
+              {data.maxDownloads && (
+                <span className="flex items-center gap-1 tabular">
+                  <Users className="size-3.5" />
+                  {t('detail.limitUsed', { n: data.counts.recipients, max: data.maxDownloads })}
+                </span>
+              )}
               <span className="flex items-center gap-1">
                 {data.onChange === 'pause' ? <CirclePause className="size-3.5" /> : <RefreshCw className="size-3.5" />}
                 {data.onChange === 'pause' ? t('create.onChangePause') : t('create.onChangeFollow')}

@@ -29,7 +29,7 @@ until the recipient downloads it, and the bytes travel encrypted end to end.
   Nothing is copied. The recipient browses folders as a tree and downloads single files or everything as a zip.
 - **End-to-end encryption.** The key lives only in the link's `#fragment`, which browsers never send to a server.
   The recipient's browser decrypts and verifies every byte. Proxies, CDNs and tunnels see only ciphertext.
-- **Optional password, expiry and download limit** per link, with a lock after repeated wrong passwords.
+- **Optional password, expiry and a limit on how many people may download** per link, with a lock after repeated wrong passwords.
 - **Know what happened.** Every open, wrong password, download start, completion, interruption and in-browser
   integrity check is logged with time, IP, country, browser, OS and language. Link previews from chat apps are
   logged separately.
@@ -100,10 +100,11 @@ Known limits, by design:
 - The key proof is the same for every request of a link: whoever can read the decrypted traffic of a link
   (the tunnel provider) could replay it to burn the password attempts and lock that link. Such a party can block
   the traffic anyway.
-- The download limit counts downloads the recipient got: complete ones, and interrupted ones that stopped
-  within the last record (64 KiB) of the end. A cancelled or failed download can be retried. Every download
-  starts from the first byte, so stopping early on purpose never yields the end of a file. Downloads in flight
-  hold their place in the quota; "download all" counts as one.
+- The download limit counts people, not downloads: a visitor counts once they got the files (a complete
+  download, or one stopped within the last 64 KiB record; every download starts from the first byte, so
+  stopping early on purpose never yields the end of a file). Whoever already counts may retry and fetch the
+  other files; someone new finds the link exhausted, and so does someone who drops the visitor cookie, which
+  lasts a year. People downloading for the first time hold their place until they finish.
   Per-visitor limits rely on a cookie the visitor can drop; the per-link and global limits do not.
 - A file counts as unchanged while its size and modification time are the same. Someone who can write to the
   disk and restore both after editing could serve new content without the link noticing; that person already

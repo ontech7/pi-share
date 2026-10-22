@@ -155,18 +155,35 @@ describe('download limits', () => {
     expect(cancelled.statusCode).toBe(200);
     for await (const _chunk of cancelled.body) break;
     await settled(link.id, 'download_aborted');
-    let current = await detail(link.id);
-    expect(current.counts).toMatchObject({ started: 1, downloads: 0 });
+    const current = await detail(link.id);
+    expect(current.counts).toMatchObject({ started: 1, downloads: 0, recipients: 0 });
     expect(current.state).toBe('active');
 
     const retry = await stack.call(visitor, 'GET', `/api/links/${link.id}/files/${entryId(0, '')}`, undefined, ticket);
     expect(retry.statusCode).toBe(200);
-    current = await detail(link.id);
-    expect(current.counts).toMatchObject({ started: 2, downloads: 1 });
-    expect(current.state).toBe('exhausted');
+    expect((await detail(link.id)).counts).toMatchObject({ started: 2, downloads: 1, recipients: 1 });
   });
 
-  it('keeps a place in the quota for downloads in flight', async () => {
+  it('counts people: whoever got the files may come back, someone new may not', async () => {
+    const link = await create({ paths: ['Work/b.txt', 'Work/c.txt'], maxDownloads: 1 });
+    const first = await stack.visit(link.id, '198.51.100.63');
+    const { ticket } = (await stack.open(first, link)).json() as { ticket: string };
+    const url = (relative: number) => `/api/links/${link.id}/files/${entryId(relative, '')}`;
+    expect((await stack.call(first, 'GET', url(0), undefined, ticket)).statusCode).toBe(200);
+    expect((await detail(link.id)).state).toBe('exhausted');
+
+    expect((await stack.call(first, 'GET', url(0), undefined, ticket)).statusCode).toBe(200);
+    expect((await stack.call(first, 'GET', url(1), undefined, ticket)).statusCode).toBe(200);
+    expect((await stack.open(first, link)).statusCode).toBe(200);
+
+    const second = await stack.visit(link.id, '198.51.100.64');
+    const refused = await stack.open(second, link);
+    expect(refused.statusCode).toBe(404);
+    expect(refused.json()).toEqual({ error: 'unavailable', reason: 'exhausted' });
+    expect((await detail(link.id)).counts).toMatchObject({ downloads: 3, recipients: 1 });
+  });
+
+  it('keeps a place in the limit for someone new downloading', async () => {
     const link = await create({ paths: ['Work/big.bin'], maxDownloads: 1 });
     const first = await stack.visit(link.id, '198.51.100.61');
     const second = await stack.visit(link.id, '198.51.100.62');
@@ -179,17 +196,6 @@ describe('download limits', () => {
     running.body.destroy();
     await settled(link.id, 'download_aborted');
     expect((await stack.call(second, 'GET', url, undefined, secondTicket)).statusCode).toBe(200);
-  });
-
-  it('counts complete downloads against the limit', async () => {
-    const link = await create({ paths: ['Work/b.txt'], maxDownloads: 2 });
-    const visitor = await stack.visit(link.id);
-    const { ticket } = (await stack.open(visitor, link)).json() as { ticket: string };
-    const url = `/api/links/${link.id}/files/${entryId(0, '')}`;
-    expect((await stack.call(visitor, 'GET', url, undefined, ticket)).statusCode).toBe(200);
-    expect((await stack.call(visitor, 'GET', url, undefined, ticket)).statusCode).toBe(200);
-    expect((await stack.call(visitor, 'GET', url, undefined, ticket)).statusCode).toBe(404);
-    expect(((await stack.adminCall('GET', `/api/links/${link.id}`)).body as LinkDetail).state).toBe('exhausted');
   });
 });
 

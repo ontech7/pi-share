@@ -60,7 +60,15 @@ export type NewEvent = Visit & {
 
 export type ServableLink = { link: LinkRow; content: Inspection; counts: LinkCounts; key: Buffer };
 
-const EMPTY_COUNTS: LinkCounts = { opens: 0, started: 0, downloads: 0, verified: 0, visitors: 0, failedPasswords: 0 };
+const EMPTY_COUNTS: LinkCounts = {
+  opens: 0,
+  started: 0,
+  downloads: 0,
+  recipients: 0,
+  verified: 0,
+  visitors: 0,
+  failedPasswords: 0,
+};
 
 export type SharesDeps = {
   db: Db;
@@ -307,13 +315,12 @@ export class Shares {
   openCount(): number {
     const now = Date.now();
     const rows = this.db
-      .select({ id: links.id, maxDownloads: links.maxDownloads })
+      .select({ id: links.id })
       .from(links)
       .where(and(eq(links.active, true), isNull(links.lockedAt), or(isNull(links.expiresAt), gt(links.expiresAt, now))))
       .all();
-    const counts = rows.some((row) => row.maxDownloads) ? this.counts() : new Map();
+    // A link at its limit stays open: the people who already downloaded may still come back for the files.
     return rows.filter((row) => {
-      if (row.maxDownloads && (counts.get(row.id)?.downloads ?? 0) >= row.maxDownloads) return false;
       const items = this.db.select({ path: linkFiles.path }).from(linkFiles).where(eq(linkFiles.linkId, row.id)).all();
       return items.some((item) => this.storage.exists(item.path));
     }).length;
@@ -333,13 +340,19 @@ export class Shares {
     return sha256(link.passwordHash ?? '').slice(0, 12);
   }
 
-  /** What the broker may serve right now, or why not. */
-  servable(id: string): { ok: true; value: ServableLink } | { ok: false; reason: LinkState | 'not_found' } {
+  /**
+   * What the broker may serve right now to this visitor, or why not. A link whose limit is reached keeps
+   * serving the people who already got the files: they may retry or fetch the other files.
+   */
+  servable(
+    id: string,
+    visitor?: string | null,
+  ): { ok: true; value: ServableLink } | { ok: false; reason: LinkState | 'not_found' } {
     const link = this.db.select().from(links).where(eq(links.id, id)).get();
     if (!link) return { ok: false, reason: 'not_found' };
     const content = this.inspect(link);
     const counts = this.counts(id).get(id) ?? EMPTY_COUNTS;
-    const state = this.stateOf(link, content, counts);
+    const state = this.stateOf(link, content, counts, !!visitor && this.isRecipient(id, visitor));
     if (state !== 'active') return { ok: false, reason: state };
     return { ok: true, value: { link, content, counts, key: this.vault.open(link.sealedKey, id) } };
   }
@@ -460,6 +473,7 @@ export class Shares {
         opens: sql<number>`sum(${events.type} = 'open')`,
         started: sql<number>`count(distinct case when ${events.type} = 'download_started' then ${events.downloadId} end)`,
         downloads: sql<number>`count(distinct case when ${events.counted} then ${events.downloadId} end)`,
+        recipients: sql<number>`count(distinct case when ${events.counted} then ${events.visitor} end)`,
         verified: sql<number>`count(distinct case when ${events.type} = 'download_verified' then ${events.downloadId} end)`,
         visitors: sql<number>`count(distinct case when ${events.type} = 'open' then coalesce(${events.visitor}, ${events.ip}) end)`,
         failedPasswords: sql<number>`sum(${events.type} = 'password_failed')`,
@@ -472,12 +486,22 @@ export class Shares {
     return new Map(rows.map(({ linkId, ...counts }) => [linkId, counts]));
   }
 
-  private stateOf(link: LinkRow, content: Inspection, counts: LinkCounts): LinkState {
+  /** Whether this visitor already got the files of this link once. */
+  isRecipient(linkId: string, visitor: string): boolean {
+    const row = this.db
+      .select({ id: events.id })
+      .from(events)
+      .where(and(eq(events.linkId, linkId), eq(events.visitor, visitor), eq(events.counted, true)))
+      .get();
+    return row !== undefined;
+  }
+
+  private stateOf(link: LinkRow, content: Inspection, counts: LinkCounts, recipient = false): LinkState {
     if (link.lockedAt) return 'locked';
     if (!link.active) return 'disabled';
     if (link.expiresAt && link.expiresAt <= Date.now()) return 'expired';
-    // Only downloads the recipient got (all of it, or all but the last record) use up the quota.
-    if (link.maxDownloads && counts.downloads >= link.maxDownloads) return 'exhausted';
+    // The limit counts people (visitors) who got the files, so whoever already did can always retry.
+    if (link.maxDownloads && counts.recipients >= link.maxDownloads && !recipient) return 'exhausted';
     const present = content.items.some((item) => item.state !== 'missing');
     if (link.onChange === 'pause' && content.changed && present) return 'paused';
     if (content.entries.length === 0) return 'unavailable';

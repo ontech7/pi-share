@@ -28,18 +28,25 @@ export class SensitiveList {
   private reload() {
     if (!this.file || Date.now() - this.checkedAt < RELOAD_INTERVAL) return;
     this.checkedAt = Date.now();
-    let modifiedAt: number;
+    // Stat and read the same open file, so a list swapped in between cannot mix two versions.
+    let fd: number;
     try {
-      modifiedAt = fs.statSync(this.file).mtimeMs;
+      fd = fs.openSync(this.file, 'r');
     } catch {
       this.entries = [];
       this.loadedAt = -1;
       this.fingerprint = '';
       return;
     }
-    if (modifiedAt === this.loadedAt) return;
-    const content = fs.readFileSync(this.file, 'utf8');
-    this.loadedAt = modifiedAt;
+    let content: string;
+    try {
+      const modifiedAt = fs.fstatSync(fd).mtimeMs;
+      if (modifiedAt === this.loadedAt) return;
+      content = fs.readFileSync(fd, 'utf8');
+      this.loadedAt = modifiedAt;
+    } finally {
+      fs.closeSync(fd);
+    }
     // The list is rewritten on a timer even when nothing changed: keep the verdicts unless its content did.
     const fingerprint = crypto.createHash('sha256').update(content).digest('hex');
     if (fingerprint === this.fingerprint) return;

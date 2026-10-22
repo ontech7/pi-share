@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## [0.2.0] - 2026-10-22
 
 ### Added
+
 - **Folders.** Tick a folder in the picker to share everything below it. Recipients browse it as a tree and
   download single files or the whole folder as a zip.
 - **What happens when files change**, chosen per link: _pause_ the link until you review and accept the list of
@@ -15,6 +16,7 @@ All notable changes to this project are documented here. The format follows
 - Recipients holding the link learn why it is unavailable (paused, expired, limit reached, turned off).
 
 ### Changed
+
 - **The download limit counts people, not downloads.** Someone counts once they got the files; they may retry
   and fetch every other file of the link, while someone new finds it exhausted. Cancelled or interrupted
   downloads no longer count.
@@ -22,11 +24,13 @@ All notable changes to this project are documented here. The format follows
 - The container health probes check the real answer of each process.
 
 ### Security
+
 - Fixes from an independent review of the folder feature: the service switch no longer walks folders on public
   requests, folder walks are capped and cached, misleading file names are left out, accepting changes names the
   exact version the owner reviewed and asks before sensitive content.
 
 ### Fixed
+
 - Folders the service may not read answer with a clear message instead of an error.
 
 ## [0.1.0] - 2026-10-22

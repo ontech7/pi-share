@@ -5,7 +5,7 @@ import type { BrowseEntry } from '../../../shared/api.ts';
 import { formatBytes, formatDate } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Spinner } from '../../ui/Spinner.tsx';
-import { api, keys } from '../api.ts';
+import { ApiError, api, keys } from '../api.ts';
 
 type Props = {
   path: string;
@@ -54,7 +54,11 @@ export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
 
       <div className="overflow-hidden rounded-2xl border border-line">
         {listing.isError ? (
-          <p className="p-6 text-sm text-danger">{t('common.error')}</p>
+          <p className="p-6 text-sm text-danger">
+            {listing.error instanceof ApiError && listing.error.code === 'unreadable'
+              ? t('create.unreadable')
+              : t('common.error')}
+          </p>
         ) : !listing.data ? (
           <div className="grid h-48 place-items-center text-muted">
             <Spinner className="size-5" />

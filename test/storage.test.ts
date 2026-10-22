@@ -51,3 +51,16 @@ describe('storage', () => {
     expect(storage.state(file)).toBe('missing');
   });
 });
+
+describe('storage permissions', () => {
+  it.skipIf(process.getuid?.() === 0)('reports a folder it may not read as unreadable', () => {
+    const root = tempDir();
+    writeFiles(root, { 'Locked/photo.jpg': 'x' });
+    fs.chmodSync(path.join(root, 'Locked'), 0o000);
+    try {
+      expect(() => new Storage(root).browse('Locked')).toThrow(expect.objectContaining({ code: 'unreadable' }));
+    } finally {
+      fs.chmodSync(path.join(root, 'Locked'), 0o755);
+    }
+  });
+});

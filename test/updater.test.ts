@@ -23,7 +23,8 @@ if args[0] == "pull":
     sys.exit(1 if state.get("pullFails") else 0)
 if args[:2] == ["image", "inspect"]:
     ref = args[-1]
-    version = ref.rsplit(":", 1)[1]
+    version = ref.split("@")[0].rsplit(":", 1)[1]
+    version = state.get("versions", {}).get(version, version)
     if "Labels" in args[3]:
         labels = state.get("labels") or {
             "org.opencontainers.image.source": "https://github.com/ontech7/pi-share",
@@ -35,8 +36,14 @@ if args[:2] == ["image", "inspect"]:
     sys.exit(0)
 if args[0] == "compose":
     env_file = args[args.index("--env-file") + 1]
+    running = open(env_file).read()
+    if "up" in args:
+        if any(f":{v}" in running for v in state.get("hang", [])):
+            import time
+            time.sleep(60)
+        if state.get("lockData") and any(f":{v}" in running for v in state.get("unhealthy", [])):
+            os.chmod(state["lockData"], 0o555)
     if "ps" in args:
-        running = open(env_file).read()
         bad = any(f":{v}" in running for v in state.get("unhealthy", []))
         for name in ("pi-share-admin", "pi-share-edge"):
             print(json.dumps({"Name": name, "State": "running", "Health": "unhealthy" if bad else "healthy"}))
@@ -97,6 +104,7 @@ function writeConfig(extra: Record<string, string>) {
     STATUS_DIR: dirs.status,
     BACKUP_DIR: dirs.backup,
     HEALTH_TIMEOUT: '1',
+    COOLDOWN: '0',
     VERIFY_PROVENANCE: 'off',
     DOCKER: path.join(dirs.stub, 'docker'),
     GITHUB_API: api,
@@ -118,9 +126,10 @@ function request(body: unknown) {
 }
 
 /** Async on purpose: the fake GitHub API lives in this process and must keep answering while Python runs. */
-function runUpdater(extraEnv: Record<string, string> = {}, pathOverride?: string) {
-  return new Promise<{ status: number; stderr: string }>((resolve) => {
-    execFile(
+function startUpdater(extraEnv: Record<string, string> = {}, pathOverride?: string) {
+  let child: ReturnType<typeof execFile> | undefined;
+  const done = new Promise<{ status: number; stderr: string }>((resolve) => {
+    child = execFile(
       PYTHON,
       ['-I', UPDATER],
       {
@@ -135,7 +144,24 @@ function runUpdater(extraEnv: Record<string, string> = {}, pathOverride?: string
       (error, _stdout, stderr) => resolve({ status: error ? Number(error.code ?? 1) : 0, stderr }),
     );
   });
+  return { done, child: child as NonNullable<typeof child> };
 }
+
+const runUpdater = (extraEnv: Record<string, string> = {}, pathOverride?: string) =>
+  startUpdater(extraEnv, pathOverride).done;
+
+/** A PATH with python3 (and the given extra commands) and nothing else. */
+function onlyPath(extra: Record<string, string> = {}) {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.symlinkSync(PYTHON, path.join(bin, 'python3'));
+  for (const [name, script] of Object.entries(extra)) fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  return bin;
+}
+
+const until = async (condition: () => boolean) => {
+  for (let i = 0; i < 200 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+};
 
 const status = () => JSON.parse(fs.readFileSync(path.join(dirs.status, 'status.json'), 'utf8'));
 const env = () => fs.readFileSync(path.join(dirs.etc, '.env'), 'utf8');
@@ -184,7 +210,18 @@ describe('the updater on the host', () => {
   });
 
   it('refuses the running version, older ones and anything that is not a version', async () => {
-    for (const body of [{ version: '0.3.0' }, { version: '0.2.9' }, { version: '1.0.0; rm -rf /' }, '{nope', '[]']) {
+    const bodies = [
+      { version: '0.3.0' },
+      { version: '0.2.9' },
+      { version: '1.0.0; rm -rf /' },
+      { version: '0.4.0\n' },
+      { version: '٠.4.0' },
+      { version: '０.4.0' },
+      '{nope',
+      '[]',
+      `${'['.repeat(5000)}${']'.repeat(5000)}`,
+    ];
+    for (const body of bodies) {
       request(body);
       await runUpdater();
       expect(status().state).toBe('failed');
@@ -256,15 +293,171 @@ describe('the updater on the host', () => {
   it('requires a verified build provenance when told to, and refuses without the GitHub CLI', async () => {
     writeConfig({ VERIFY_PROVENANCE: 'required' });
     request({ version: '0.4.0' });
-    // A PATH with python3 and nothing else, so gh is surely missing.
-    const bin = path.join(root, 'bin');
-    fs.mkdirSync(bin);
-    fs.symlinkSync(PYTHON, path.join(bin, 'python3'));
-    await runUpdater({}, bin);
+    await runUpdater({}, onlyPath());
     expect(status()).toMatchObject({
       state: 'failed',
-      message: 'build provenance is required but the GitHub CLI is not installed',
+      message: 'build provenance is required but the GitHub CLI or its token is missing',
     });
     expect(env()).toContain(':0.3.0\n');
+  });
+
+  it('verifies the provenance of the exact digest it installs, built by the release workflow from its tag', async () => {
+    const gh = `#!/bin/sh\nprintf '%s\\n' "$@" > "$STUB_STATE/gh.args"\nexit "\${GH_EXIT:-0}"\n`;
+    const bin = onlyPath({ gh });
+    writeConfig({ VERIFY_PROVENANCE: 'auto' });
+    request({ version: '0.4.0' });
+    await runUpdater({ GH_TOKEN: 'token' }, bin);
+    expect(status().state).toBe('done');
+    expect(fs.readFileSync(path.join(dirs.stub, 'gh.args'), 'utf8').trim().split('\n')).toEqual([
+      'attestation',
+      'verify',
+      `oci://${IMAGE}@sha256:${DIGEST}`,
+      '--repo',
+      'ontech7/pi-share',
+      '--signer-workflow',
+      'ontech7/pi-share/.github/workflows/release.yml',
+      '--source-ref',
+      'refs/tags/v0.4.0',
+      '--deny-self-hosted-runners',
+    ]);
+
+    fs.writeFileSync(path.join(dirs.etc, '.env'), `PI_SHARE_IMAGE=${IMAGE}:0.3.0\n`);
+    request({ version: '0.4.0' });
+    await runUpdater({ GH_TOKEN: 'token', GH_EXIT: '1' }, bin);
+    expect(status()).toMatchObject({
+      state: 'failed',
+      message: 'the build provenance of the image could not be verified',
+    });
+    expect(env()).toContain(':0.3.0\n');
+  });
+
+  it('skips the provenance check by default when the GitHub CLI has no token', async () => {
+    writeConfig({ VERIFY_PROVENANCE: 'auto' });
+    const bin = onlyPath({ gh: '#!/bin/sh\nexit 1\n' });
+    request({ version: '0.4.0' });
+    await runUpdater({}, bin);
+    expect(status().state).toBe('done');
+  });
+
+  it('reads the running version from the image when the env file names a moving x.y tag', async () => {
+    fs.writeFileSync(path.join(dirs.etc, '.env'), `PI_SHARE_IMAGE=${IMAGE}:0.3\n`);
+    setState({ versions: { '0.3': '0.3.4' } });
+    request({ version: '0.3.2' });
+    await runUpdater();
+    expect(status()).toMatchObject({ state: 'failed', message: '0.3.2 is not newer than the running 0.3.4' });
+    request({ version: '0.4.0' });
+    await runUpdater();
+    expect(status().state).toBe('done');
+    expect(env()).toBe(`PI_SHARE_IMAGE=${IMAGE}:0.4.0@sha256:${DIGEST}\n`);
+  });
+
+  it('keeps the mode of the env file it rewrites', async () => {
+    fs.chmodSync(path.join(dirs.etc, '.env'), 0o600);
+    request({ version: '0.4.0' });
+    await runUpdater();
+    expect(status().state).toBe('done');
+    expect(fs.statSync(path.join(dirs.etc, '.env')).mode & 0o777).toBe(0o600);
+  });
+
+  it('removes a request that is a directory instead of tripping over it', async () => {
+    fs.mkdirSync(path.join(dirs.request, 'request.json', 'deeper'), { recursive: true });
+    expect((await runUpdater()).status).toBe(0);
+    expect(status()).toMatchObject({ state: 'failed', message: 'the request was not a small plain file' });
+    expect(fs.existsSync(path.join(dirs.request, 'request.json'))).toBe(false);
+  });
+
+  it('spaces runs out, so a flood of requests cannot keep it busy', async () => {
+    writeConfig({ COOLDOWN: '2' });
+    request('{nope');
+    await runUpdater();
+    request('{nope');
+    const started = Date.now();
+    await runUpdater();
+    expect(Date.now() - started).toBeGreaterThan(1500);
+  });
+
+  it('refuses to back up a database larger than the free space, and starts the running version again', async () => {
+    fs.truncateSync(path.join(dirs.data, 'share.db'), 15 * 1024 ** 4);
+    request({ version: '0.4.0' });
+    await runUpdater();
+    expect(status()).toMatchObject({
+      state: 'failed',
+      message: 'there is not enough free space to back up the database, nothing was changed',
+    });
+    expect(fs.readdirSync(dirs.backup).filter((name) => !name.startsWith('.'))).toEqual([]);
+    expect(calls().some((args) => args.includes('up'))).toBe(true);
+    expect(env()).toContain(':0.3.0\n');
+  });
+
+  it('refuses to go on without a database to back up', async () => {
+    fs.rmSync(path.join(dirs.data, 'share.db'));
+    fs.mkdirSync(path.join(dirs.data, 'share.db'));
+    request({ version: '0.4.0' });
+    await runUpdater();
+    expect(status()).toMatchObject({ state: 'failed', message: 'the database was not found, nothing was changed' });
+    expect(env()).toContain(':0.3.0\n');
+  });
+
+  it('rolls back over whatever the new version left in place of the database files', async () => {
+    setState({ unhealthy: ['0.4.0'] });
+    request({ version: '0.4.0' });
+    fs.mkdirSync(path.join(dirs.data, 'share.db-wal', 'deeper'), { recursive: true });
+    await runUpdater();
+    expect(status().state).toBe('rolled_back');
+    expect(fs.existsSync(path.join(dirs.data, 'share.db-wal'))).toBe(false);
+    expect(fs.readFileSync(path.join(dirs.data, 'share.db'), 'utf8')).toBe('database at 0.3.0');
+  });
+
+  it('still brings the previous version back when its database cannot be put back', async () => {
+    setState({ unhealthy: ['0.4.0'], lockData: dirs.data });
+    request({ version: '0.4.0' });
+    try {
+      await runUpdater();
+    } finally {
+      fs.chmodSync(dirs.data, 0o755);
+    }
+    expect(status()).toMatchObject({
+      state: 'rolled_back',
+      message: '0.4.0 did not start correctly; 0.3.0 is running again, but its database backup could not be put back',
+    });
+    expect(env()).toBe(`TZ=UTC\nPI_SHARE_IMAGE=${IMAGE}:0.3.0\n`);
+    expect(calls().filter((args) => args.includes('up'))).toHaveLength(2);
+  });
+
+  it('rolls back when it is stopped half-way through the switch', async () => {
+    setState({ hang: ['0.4.0'] });
+    request({ version: '0.4.0' });
+    const { done, child } = startUpdater();
+    await until(() => calls().some((args) => args.includes('up')));
+    child.kill('SIGTERM');
+    await done;
+    expect(status()).toMatchObject({
+      state: 'rolled_back',
+      message: 'the switch to 0.4.0 was interrupted; 0.3.0 is running again',
+    });
+    expect(env()).toBe(`TZ=UTC\nPI_SHARE_IMAGE=${IMAGE}:0.3.0\n`);
+    expect(fs.existsSync(path.join(dirs.backup, '.switching'))).toBe(false);
+  });
+
+  it('undoes a switch a previous run could not finish, without a new request', async () => {
+    const folder = path.join(dirs.backup, '20261022-000000-0.3.0');
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, 'share.db'), 'database at 0.3.0');
+    const before = env();
+    fs.writeFileSync(path.join(dirs.etc, '.env'), `TZ=UTC\nPI_SHARE_IMAGE=${IMAGE}:0.4.0@sha256:${DIGEST}\n`);
+    fs.writeFileSync(path.join(dirs.data, 'share.db'), 'database at 0.4.0');
+    fs.writeFileSync(
+      path.join(dirs.backup, '.switching'),
+      JSON.stringify({ version: '0.4.0', current: '0.3.0', env: before, folder }),
+    );
+    await runUpdater();
+    expect(status()).toMatchObject({
+      state: 'rolled_back',
+      version: '0.4.0',
+      message: 'the update to 0.4.0 was interrupted; 0.3.0 is running again',
+    });
+    expect(env()).toBe(before);
+    expect(fs.readFileSync(path.join(dirs.data, 'share.db'), 'utf8')).toBe('database at 0.3.0');
+    expect(fs.existsSync(path.join(dirs.backup, '.switching'))).toBe(false);
   });
 });

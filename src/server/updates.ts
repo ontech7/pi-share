@@ -16,6 +16,8 @@ export const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 const CHECK_EVERY = 6 * 60 * 60 * 1000;
 const MAX_STATUS_BYTES = 4096;
 const MAX_NOTES = 8000;
+/** Longer than the updater unit's TimeoutStartSec plus its stop timeout. */
+const STALE_STATUS = 60 * 60 * 1000;
 
 export function compareVersions(a: string, b: string): number {
   const left = a.split('.').map(Number);
@@ -138,7 +140,12 @@ export class Updates {
       const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       try {
         if (fs.fstatSync(fd).size > MAX_STATUS_BYTES) return null;
-        return statusSchema.parse(JSON.parse(fs.readFileSync(fd, 'utf8')));
+        const status = statusSchema.parse(JSON.parse(fs.readFileSync(fd, 'utf8')));
+        // An updater killed mid-way never writes a final state; past its time limit it is not coming back.
+        if (!finalUpdateStates.includes(status.state) && Date.now() - status.at > STALE_STATUS) {
+          return { ...status, state: 'failed', message: 'the updater stopped without finishing: check its log' };
+        }
+        return status;
       } finally {
         fs.closeSync(fd);
       }

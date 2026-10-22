@@ -84,10 +84,18 @@ describe('install requests', () => {
   });
 
   it('shows the progress the host reports and refuses a second request meanwhile', async () => {
-    writeStatus(JSON.stringify({ state: 'downloading', version: '1.3.0', message: null, at: 1 }));
-    expect((await info()).status).toEqual({ state: 'downloading', version: '1.3.0', message: null, at: 1 });
+    const now = Date.now();
+    writeStatus(JSON.stringify({ state: 'downloading', version: '1.3.0', message: null, at: now }));
+    expect((await info()).status).toEqual({ state: 'downloading', version: '1.3.0', message: null, at: now });
     const busy = await stack.adminCall('POST', '/api/updates/install', { version: '1.3.0' });
     expect(busy).toMatchObject({ status: 409, body: { error: 'in_progress' } });
+  });
+
+  it('gives up on an update the host left half-way long ago, so a new one can be asked for', async () => {
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    writeStatus(JSON.stringify({ state: 'restarting', version: '1.3.0', message: null, at: twoHoursAgo }));
+    expect((await info()).status).toMatchObject({ state: 'failed', version: '1.3.0' });
+    expect((await stack.adminCall('POST', '/api/updates/install', { version: '1.3.0' })).status).toBe(202);
   });
 
   it('ignores a status file that is malformed, oversized or a symlink', async () => {

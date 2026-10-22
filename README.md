@@ -131,17 +131,20 @@ The updater is the only piece that runs as root, because it drives Docker: the a
 socket. The admin can only leave a version number in a folder, and the updater decides everything again by itself:
 - it reads nothing but that version (no symlinks, no special files, a few bytes at most) and echoes nothing back;
 - the version must be a published, non-prerelease release of this repository, newer than the running one;
-- the image must declare this repository and that version, its build provenance is verified when the GitHub CLI is
-  installed (`VERIFY_PROVENANCE=required` makes it mandatory), and it runs pinned by digest;
-- the database is copied first, and if the new version is not healthy within two minutes the previous image and
-  database come back.
+- the image must declare this repository and that version and runs pinned by digest; with the GitHub CLI and a
+  token, its build provenance is verified too: built by the release workflow, from that version's tag
+  (`VERIFY_PROVENANCE=required` makes it mandatory);
+- the database is copied first (when there is room for it), and if the new version is not healthy within two
+  minutes, or the run is stopped half-way, the previous image and database come back. An update a power cut
+  interrupted is undone at the next boot.
 
 <details>
 <summary><strong>Install the updater</strong></summary>
 
 Read [`contrib/updater`](contrib/updater) first: it runs as root. The defaults expect `compose.yaml`,
 [`compose.updater.yaml`](contrib/updater/compose.updater.yaml) and `.env` in `/etc/pi-share`; elsewhere, change the
-paths in `updater.env` and `ReadWritePaths` in the service.
+paths in `updater.env` and `ReadWritePaths` in the service. `PI_SHARE_IMAGE` in `.env` can name a full version
+(`0.4.0`) or a moving one (`0.4`); after the first update it is pinned to the exact version and digest.
 
 ```sh
 sudo install -m 0755 -D contrib/updater/pi-share-updater.py /usr/local/lib/pi-share/pi-share-updater.py
@@ -149,7 +152,9 @@ sudo install -m 0644 contrib/updater/updater.env.example /etc/pi-share/updater.e
 sudo install -m 0644 contrib/updater/pi-share-updater.path contrib/updater/pi-share-updater.service /etc/systemd/system/
 sudo install -d -o 10001 -g 10001 -m 0750 /var/lib/pi-share-update/request
 sudo install -d -m 0755 /var/lib/pi-share-update/status
-sudo systemctl daemon-reload && sudo systemctl enable --now pi-share-updater.path
+sudo install -d -m 0700 /var/lib/pi-share-update/backup /var/lib/pi-share-update/docker /var/lib/pi-share-update/gh
+sudo systemctl daemon-reload && sudo systemctl enable pi-share-updater.service
+sudo systemctl enable --now pi-share-updater.path
 cd /etc/pi-share && docker compose -f compose.yaml -f compose.updater.yaml up -d
 ```
 

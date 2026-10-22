@@ -47,7 +47,6 @@ export function ReleaseNotes({ markdown }: { markdown: string }) {
 
 function inline(text: string): ReactNode {
   return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, index) => {
-    // biome-ignore lint/suspicious/noArrayIndexKey: static text, never reordered
     const key = index;
     if (part.startsWith('`') && part.endsWith('`') && part.length > 1) {
       return (

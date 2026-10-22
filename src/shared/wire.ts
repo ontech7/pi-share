@@ -70,6 +70,12 @@ export async function passwordVerifier(password: string, linkId: string): Promis
 
 export type WireFailure = 'format' | 'integrity' | 'truncated';
 
+/** Plaintext size from the ciphertext length: header plus a 16-byte tag per record. */
+export function plainSize(encrypted: number, recordSize = RECORD_SIZE): number {
+  const records = Math.max(1, Math.ceil((encrypted - HEADER_SIZE) / (recordSize + TAG_SIZE)));
+  return encrypted - HEADER_SIZE - records * TAG_SIZE;
+}
+
 export class WireError extends Error {
   readonly reason: WireFailure;
 

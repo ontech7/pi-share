@@ -4,7 +4,11 @@ import { listenOptions } from './config.ts';
 
 export async function listen(app: FastifyInstance, address: string, socketMode = 0o660) {
   const options = listenOptions(address);
-  if ('path' in options) fs.rmSync(options.path, { force: true });
+  if ('path' in options) {
+    // sun_path is 104 bytes on macOS and 108 on Linux; longer paths fail in confusing ways
+    if (Buffer.byteLength(options.path) > 100) throw new Error(`Socket path too long: ${options.path}`);
+    fs.rmSync(options.path, { force: true });
+  }
   await app.listen(options);
   if ('path' in options) fs.chmodSync(options.path, socketMode);
 }

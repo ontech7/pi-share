@@ -1,0 +1,7 @@
+.git
+data
+dev
+test
+docs
+*.secret
+*.env

@@ -1,6 +1,6 @@
 {
   "name": "pi-share",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "license": "MIT",
   "description": "Self-hosted, end-to-end encrypted share links for files already on your disk. Built for a Raspberry Pi.",
   "private": true,

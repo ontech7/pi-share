@@ -131,6 +131,11 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   const authorize = (id: string, givenProof: string, visit: Visit) => {
     const link = shares.find(id);
     if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return { ok: false as const };
+    // Checked before the password, so nobody outside the allowed networks can even try one.
+    if (!shares.allowsNetwork(link, visit.ip)) {
+      shares.record(id, { ...visit, type: 'refused', detail: 'network' });
+      return { ok: false as const, reason: 'network' as const };
+    }
     const found = shares.servable(id, visit.visitor);
     if (!found.ok) {
       shares.record(id, { ...visit, type: 'refused', detail: found.reason });
@@ -223,6 +228,11 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         shares.record(id, { ...visit, type: 'refused', detail: found.reason });
         // The ticket already proves the key: tell why, so retries are not counted as guesses.
         return unavailable(reply, found.reason);
+      }
+      // A ticket does not carry over to another network, such as after leaving the VPN.
+      if (!shares.allowsNetwork(found.value.link, visit.ip)) {
+        shares.record(id, { ...visit, type: 'refused', detail: 'network' });
+        return unavailable(reply, 'network');
       }
       const { entries } = found.value.content;
       const selected = part === 'all' ? entries : entries.filter((entry) => entry.id === part);

@@ -13,6 +13,8 @@ export const links = sqliteTable('links', {
   lockedAt: integer('locked_at'),
   failedPasswords: integer('failed_passwords').notNull().default(0),
   onChange: text('on_change', { enum: changePolicies }).notNull().default('pause'),
+  /** JSON list of CIDRs the link may be opened from; null for any network. */
+  allowedNetworks: text('allowed_networks', { mode: 'json' }).$type<string[]>(),
 });
 
 export const linkFiles = sqliteTable(

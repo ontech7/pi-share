@@ -21,7 +21,43 @@ export const itemKinds = ['file', 'folder'] as const;
 export type ItemKind = (typeof itemKinds)[number];
 
 export type LinkState = 'active' | 'disabled' | 'expired' | 'locked' | 'exhausted' | 'paused' | 'unavailable';
+/** Why a link refuses someone holding its key: its state, or a network outside the ones it allows. */
+export type RefusalReason = LinkState | 'network';
 export type FileState = 'ok' | 'changed' | 'missing';
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
+/** IPv6 in its canonical form, through the URL parser so browser and server agree on what is valid. */
+function canonicalIPv6(value: string): string | null {
+  if (!value.includes(':') || !/^[\da-f:.]+$/i.test(value)) return null;
+  try {
+    return new URL(`http://[${value}]/`).hostname.slice(1, -1);
+  } catch {
+    return null;
+  }
+}
+
+/** "203.0.113.7", "203.0.113.0/24" or "2001:db8::/48" in canonical form, or null when it is not one. */
+export function parseNetwork(input: string): string | null {
+  const [address = '', prefix, extra] = input.trim().split('/');
+  if (extra !== undefined || (prefix !== undefined && !/^\d{1,3}$/.test(prefix))) return null;
+  if (IPV4.test(address)) {
+    const bits = prefix === undefined ? 32 : Number(prefix);
+    return bits <= 32 ? `${address}/${bits}` : null;
+  }
+  const v6 = canonicalIPv6(address);
+  if (!v6) return null;
+  const bits = prefix === undefined ? 128 : Number(prefix);
+  return bits <= 128 ? `${v6}/${bits}` : null;
+}
+
+export const MAX_NETWORKS = 32;
+const network = z
+  .string()
+  .max(64)
+  .refine((value) => parseNetwork(value) !== null, 'invalid_network')
+  .transform((value) => parseNetwork(value) as string);
+const networks = z.array(network).max(MAX_NETWORKS);
 
 export const createLinkBody = z.object({
   paths: z.array(z.string().min(1).max(4096)).min(1).max(100),
@@ -30,6 +66,8 @@ export const createLinkBody = z.object({
   expiresAt: z.number().int().positive().nullable().default(null),
   maxDownloads: z.number().int().min(1).max(10_000).nullable().default(null),
   onChange: z.enum(changePolicies).optional(),
+  /** Networks the link may be opened from; empty means any. */
+  allowedNetworks: networks.default([]),
   confirmSensitive: z.boolean().default(false),
 });
 export type CreateLinkBody = z.input<typeof createLinkBody>;
@@ -41,6 +79,7 @@ export const updateLinkBody = z.object({
   maxDownloads: z.number().int().min(1).max(10_000).nullable().optional(),
   password: z.string().min(4).max(256).nullable().optional(),
   onChange: z.enum(changePolicies).optional(),
+  allowedNetworks: networks.optional(),
   /** The `version` of the changes the owner looked at: anything newer is refused, not accepted blindly. */
   acceptChanges: z
     .string()
@@ -148,6 +187,7 @@ export type LinkSummary = {
   maxDownloads: number | null;
   hasPassword: boolean;
   onChange: ChangePolicy;
+  allowedNetworks: string[];
   items: LinkItemView[];
   counts: LinkCounts;
   lastActivityAt: number | null;

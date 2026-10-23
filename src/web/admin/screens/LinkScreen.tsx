@@ -6,6 +6,7 @@ import {
   Folder,
   Lock,
   LockOpen,
+  Network,
   Pencil,
   RefreshCw,
   Trash2,
@@ -127,6 +128,14 @@ export function LinkScreen({ id }: { id: string }) {
               <span className="flex items-center gap-1">
                 {data.hasPassword ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
                 {t('detail.password')}: {data.hasPassword ? t('detail.passwordSet') : t('detail.passwordNone')}
+              </span>
+              <span className="flex items-center gap-1" title={data.allowedNetworks.join('\n') || undefined}>
+                <Network className="size-3.5" />
+                {data.allowedNetworks.length === 0
+                  ? t('networks.any')
+                  : data.allowedNetworks.length === 1
+                    ? (data.allowedNetworks[0] as string)
+                    : t('networks.count', { n: data.allowedNetworks.length })}
               </span>
             </p>
           </div>

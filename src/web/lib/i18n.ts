@@ -115,6 +115,14 @@ const en = {
   'create.sensitiveTitle': 'Sensitive files',
   'create.sensitiveBody': 'These files are marked as sensitive. Share them only if you are sure.',
   'create.sensitiveConfirm': 'Share anyway',
+  'networks.label': 'Allowed networks',
+  'networks.placeholder': 'Any network',
+  'networks.hint':
+    "Optional. One address or range per line, such as a VPN's 203.0.113.0/24 or 2001:db8::/48: the link opens only from there. Home and mobile IPv6 addresses change often, so list the range.",
+  'networks.invalid': 'Not an address or a range: {lines}',
+  'networks.tooMany': 'At most {max} networks',
+  'networks.any': 'Any network',
+  'networks.count': '{n} networks',
 
   'detail.files': 'Files and folders',
   'detail.activity': 'Activity',
@@ -228,6 +236,9 @@ const en = {
   'share.disabledBody': 'The sender turned this link off.',
   'share.lockedBody': 'Locked after too many wrong passwords. Ask the sender to unlock it.',
   'share.goneBody': 'The files are no longer available.',
+  'share.networkTitle': 'Not available from this network',
+  'share.networkBody':
+    'The sender allows this link only from certain networks, such as a company VPN. Connect to it, then open the link again.',
   'share.files': '{n} files',
   'share.showMore': 'Show {n} more',
   'share.noKeyTitle': 'The link is incomplete',
@@ -360,6 +371,14 @@ const it: Record<MessageKey, string> = {
   'create.sensitiveTitle': 'File sensibili',
   'create.sensitiveBody': 'Questi file sono segnati come sensibili. Condividili solo se sei sicuro.',
   'create.sensitiveConfirm': 'Condividi comunque',
+  'networks.label': 'Reti ammesse',
+  'networks.placeholder': 'Qualsiasi rete',
+  'networks.hint':
+    "Facoltativo. Un indirizzo o un intervallo per riga, come 203.0.113.0/24 o 2001:db8::/48 di una VPN: il link si apre solo da lì. Gli IPv6 di casa e del telefono cambiano spesso, quindi indica l'intervallo.",
+  'networks.invalid': 'Non è un indirizzo né un intervallo: {lines}',
+  'networks.tooMany': 'Al massimo {max} reti',
+  'networks.any': 'Qualsiasi rete',
+  'networks.count': '{n} reti',
 
   'detail.files': 'File e cartelle',
   'detail.activity': 'Attività',
@@ -474,6 +493,9 @@ const it: Record<MessageKey, string> = {
   'share.disabledBody': 'Chi lo ha condiviso ha disattivato questo link.',
   'share.lockedBody': 'Bloccato dopo troppe password sbagliate. Chiedi a chi lo ha condiviso di sbloccarlo.',
   'share.goneBody': 'I file non sono più disponibili.',
+  'share.networkTitle': 'Non disponibile da questa rete',
+  'share.networkBody':
+    "Chi te l'ha mandato permette questo link solo da certe reti, come una VPN aziendale. Collegati, poi apri di nuovo il link.",
   'share.files': '{n} file',
   'share.showMore': 'Mostra altri {n}',
   'share.noKeyTitle': 'Il link è incompleto',

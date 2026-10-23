@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import net from 'node:net';
 import path from 'node:path';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
@@ -29,6 +28,7 @@ import {
 } from '../shared/api.ts';
 import { isOnline } from './broker.ts';
 import type { Config } from './config.ts';
+import { allowList, isAllowed } from './network.ts';
 import type { Settings } from './settings.ts';
 import { ShareError, type Shares } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
@@ -47,21 +47,6 @@ export type AdminDeps = {
   setupCode: string | null;
   staticRoot?: string;
 };
-
-export function allowList(cidrs: string[]): net.BlockList {
-  const list = new net.BlockList();
-  for (const cidr of cidrs) {
-    const [address = '', prefix] = cidr.split('/');
-    const type = net.isIPv6(address) ? 'ipv6' : 'ipv4';
-    list.addSubnet(address, Number(prefix ?? (type === 'ipv6' ? 128 : 32)), type);
-  }
-  return list;
-}
-
-export function isAllowed(list: net.BlockList, ip: string): boolean {
-  const plain = ip.replace(/^::ffff:/, '');
-  return list.check(plain, net.isIPv6(plain) ? 'ipv6' : 'ipv4');
-}
 
 export function generateSetupCode(): string {
   const raw = crypto.randomBytes(5).toString('hex').toUpperCase();

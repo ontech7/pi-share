@@ -5,11 +5,12 @@ import {
   LinkIcon,
   LockKeyhole,
   MonitorX,
+  Network,
   ShieldCheck,
   TimerOff,
 } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import type { LinkState } from '../../shared/api.ts';
+import type { RefusalReason } from '../../shared/api.ts';
 import { formatDate } from '../lib/format.ts';
 import type { MessageKey } from '../lib/i18n.ts';
 import { useI18n } from '../lib/i18n-context.tsx';
@@ -27,7 +28,7 @@ type View =
   | { name: 'loading' }
   | { name: 'unsupported' }
   | { name: 'no-key' }
-  | { name: 'unavailable'; reason?: LinkState }
+  | { name: 'unavailable'; reason?: RefusalReason }
   | { name: 'busy' }
   | { name: 'password' }
   | { name: 'files'; grant: Grant };
@@ -124,17 +125,18 @@ function Footer() {
   );
 }
 
-const REASONS: Partial<Record<LinkState, { icon: ReactNode; title: MessageKey; body: MessageKey }>> = {
+const REASONS: Partial<Record<RefusalReason, { icon: ReactNode; title: MessageKey; body: MessageKey }>> = {
   paused: { icon: <CirclePause />, title: 'share.pausedTitle', body: 'share.pausedBody' },
   expired: { icon: <TimerOff />, title: 'share.unavailableTitle', body: 'share.expiredBody' },
   exhausted: { icon: <TimerOff />, title: 'share.unavailableTitle', body: 'share.exhaustedBody' },
   disabled: { icon: <CircleSlash />, title: 'share.unavailableTitle', body: 'share.disabledBody' },
   locked: { icon: <LockKeyhole />, title: 'share.unavailableTitle', body: 'share.lockedBody' },
   unavailable: { icon: <TimerOff />, title: 'share.unavailableTitle', body: 'share.goneBody' },
+  network: { icon: <Network />, title: 'share.networkTitle', body: 'share.networkBody' },
 };
 
 /** Only someone holding the whole link learns the reason; anyone else gets the generic notice. */
-function Unavailable({ reason }: { reason?: LinkState }) {
+function Unavailable({ reason }: { reason?: RefusalReason }) {
   const known = reason ? REASONS[reason] : undefined;
   return known ? (
     <Notice icon={known.icon} title={known.title} body={known.body} />
@@ -161,7 +163,7 @@ function PasswordForm({
 }: {
   link: LinkRef;
   onGranted: (grant: Grant) => void;
-  onUnavailable: (reason?: LinkState) => void;
+  onUnavailable: (reason?: RefusalReason) => void;
 }) {
   const { t } = useI18n();
   const [password, setPassword] = useState('');

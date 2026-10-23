@@ -15,6 +15,7 @@ import { createLinkBody, updateLinkBody } from '../shared/api.ts';
 import { type ContentDeps, folderSnapshot, type Inspection, type Item, inspect, type Snapshot } from './content.ts';
 import { hashSecret, keyProof, passwordVerifier, randomId, safeEqual, sha256, type Vault } from './crypto.ts';
 import { type Db, schema } from './db/index.ts';
+import { allowList, isAllowed } from './network.ts';
 import type { SensitiveList } from './sensitive.ts';
 import { type FolderFile, MAX_LINK_FILES, type Storage, StorageError } from './storage.ts';
 
@@ -120,6 +121,7 @@ export class Shares {
           expiresAt: body.expiresAt,
           maxDownloads: body.maxDownloads,
           onChange: body.onChange ?? defaultPolicy,
+          allowedNetworks: body.allowedNetworks.length ? body.allowedNetworks : null,
         })
         .run();
       tx.insert(linkFiles)
@@ -236,6 +238,8 @@ export class Shares {
     if (patch.expiresAt !== undefined) changes.expiresAt = patch.expiresAt;
     if (patch.maxDownloads !== undefined) changes.maxDownloads = patch.maxDownloads;
     if (patch.onChange !== undefined) changes.onChange = patch.onChange;
+    if (patch.allowedNetworks !== undefined)
+      changes.allowedNetworks = patch.allowedNetworks.length ? patch.allowedNetworks : null;
     if (patch.password !== undefined) {
       const key = this.vault.open(row.sealedKey, id);
       changes.passwordHash = patch.password ? await hashSecret(await passwordVerifier(patch.password, key, id)) : null;
@@ -333,6 +337,11 @@ export class Shares {
   /** True when the caller derived the proof from the link key, i.e. holds the whole link and not only its id. */
   holdsKey(link: LinkRow, proof: string | undefined): boolean {
     return !!proof && safeEqual(proof, keyProof(this.vault.open(link.sealedKey, link.id), link.id));
+  }
+
+  /** Whether the link may be opened from this address: always, unless it lists the networks it allows. */
+  allowsNetwork(link: LinkRow, ip: string | null | undefined): boolean {
+    return !link.allowedNetworks?.length || isAllowed(allowList(link.allowedNetworks), ip);
   }
 
   /** Changes whenever the password is set, changed or removed, so older tickets stop working. */
@@ -523,6 +532,7 @@ export class Shares {
       maxDownloads: row.maxDownloads,
       hasPassword: row.passwordHash !== null,
       onChange: row.onChange,
+      allowedNetworks: row.allowedNetworks ?? [],
       items: content.items.map(({ item, name, state, changes, size, fileCount }) => ({
         position: item.position,
         kind: item.kind,

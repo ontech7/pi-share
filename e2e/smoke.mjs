@@ -375,10 +375,13 @@ try {
 
   await panel.click('Activity');
   await panel.text('Show the provider');
+  await panel.shot('13-activity');
+  await panel.click('Notifications');
+  await panel.text('Notify me when');
   await panel.eval(`document.querySelector('[role=switch][aria-label="Notify via Telegram"]').click()`);
   await panel.text('Bot token');
-  await panel.shot('13-activity');
-  await panel.shot('13-activity-mobile', { width: 390, height: 1600, mobile: true });
+  await panel.shot('16-notifications');
+  await panel.shot('16-notifications-mobile', { width: 390, height: 1600, mobile: true });
 
   await panel.click('Updates');
   await panel.text('Installed version');

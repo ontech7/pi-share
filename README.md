@@ -289,7 +289,7 @@ Every push runs these checks, and they must pass before anything is merged:
 | `PROVIDER_DATA_URL`                                | iptoasn.com's combined table        | Where the weekly provider table (gzipped iptoasn TSV, public domain) is downloaded from  |
 
 Everything else (what a change on disk does, expiry, download limit, generated password for new links, the
-service switch, notification channels) lives in the admin's **Settings**.
+service switch, the provider lookup, notification channels) lives in the admin's **Settings**.
 
 ## Troubleshooting
 

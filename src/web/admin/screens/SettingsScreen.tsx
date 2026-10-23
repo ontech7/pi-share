@@ -4,6 +4,7 @@ import {
   ArrowUpCircle,
   BellRing,
   ChevronRight,
+  Globe,
   Link2,
   type LucideIcon,
   Radio,
@@ -17,6 +18,7 @@ import { Card } from '../../ui/Card.tsx';
 import { AccountSection } from '../settings/AccountSection.tsx';
 import { ActivitySection } from '../settings/ActivitySection.tsx';
 import { NewLinksSection } from '../settings/NewLinksSection.tsx';
+import { NotificationsSection } from '../settings/NotificationsSection.tsx';
 import { ServiceSection } from '../settings/ServiceSection.tsx';
 import { UpdatesSection } from '../settings/UpdatesSection.tsx';
 
@@ -41,11 +43,19 @@ const SECTIONS: Section[] = [
   },
   {
     id: 'activity',
-    icon: BellRing,
+    icon: Globe,
     title: 'settings.activity',
     hint: 'settings.activityHint',
     intro: 'settings.activityIntro',
     body: ActivitySection,
+  },
+  {
+    id: 'notifications',
+    icon: BellRing,
+    title: 'settings.notifications',
+    hint: 'settings.notificationsHint',
+    intro: 'settings.notificationsIntro',
+    body: NotificationsSection,
   },
   {
     id: 'updates',

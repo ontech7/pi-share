@@ -3,6 +3,31 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.5.0] - 2026-10-23
+
+### Added
+
+- Allowed networks per link: addresses or ranges (IPv4 and IPv6) a link may be opened from. Anyone else holding
+  the link is told it is not available from their network, before any password is tried; downloads stop if the
+  visitor moves to another network.
+- The provider behind each visit (home ISP, mobile operator, cloud), from a public table the admin downloads
+  weekly and looks up on disk. Clouds, servers and VPN exits are marked.
+- Notifications through ntfy, a Telegram bot or email (SMTP) for opens, downloads, wrong passwords, refused
+  attempts and chat previews, with secrets encrypted at rest.
+- A link previewed by a chat app says which one it probably was (the app is known only from what the request
+  says about itself), and that the chat may now hold the whole link.
+- Integration tokens (**Settings → Integrations**): named, with an expiry or none, shown once and stored as a hash,
+  revocable. A token can create links and see or delete the ones it created, nothing else; its links show which
+  token made them. Files on the sensitive list can be shared only from the admin, and a token creates at most 30
+  links a minute.
+
+### Changed
+
+- A new link takes the expiry and download limit of **Settings → New links** when the request leaves them out,
+  not only when it comes from the admin's dialog. `null` still means never and no limit.
+
 ## [0.4.2] - 2026-10-23
 
 ### Changed
@@ -67,6 +92,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Password, expiry, download limit and activity log per link.
 - Service switch; admin on the LAN, network-less edge behind a tunnel.
 
+[Unreleased]: https://github.com/ontech7/pi-share/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ontech7/pi-share/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ontech7/pi-share/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ontech7/pi-share/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ontech7/pi-share/compare/v0.3.0...v0.4.0

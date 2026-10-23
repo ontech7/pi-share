@@ -1,0 +1,1 @@
+ALTER TABLE `links` ADD `allowed_networks` text;

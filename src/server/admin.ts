@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import net from 'node:net';
 import path from 'node:path';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
@@ -16,10 +15,14 @@ import { z } from 'zod';
 import {
   changePasswordBody,
   createLinkBody,
+  createTokenBody,
   installUpdateBody,
   loginBody,
+  notificationsBody,
+  notificationTestBody,
   type Preferences,
   preferencesBody,
+  providersBody,
   type ServiceState,
   type SessionState,
   serviceBody,
@@ -29,46 +32,51 @@ import {
 } from '../shared/api.ts';
 import { isOnline } from './broker.ts';
 import type { Config } from './config.ts';
+import { allowList, isAllowed } from './network.ts';
+import type { Notifier } from './notify.ts';
+import type { Providers } from './providers.ts';
 import type { Settings } from './settings.ts';
 import { ShareError, type Shares } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
+import type { TokenOwner, Tokens } from './tokens.ts';
 import type { Updates } from './updates.ts';
 
 const SESSION_COOKIE = 'pi_share_session';
 const CSRF_HEADER = 'x-pi-share';
 const OPEN_ROUTES = new Set(['/api/session', '/api/setup', '/api/login']);
+/** All an integration token may do: its own links, nothing about settings, updates or other tokens. */
+const TOKEN_ROUTES = new Set(['GET /api/links', 'POST /api/links', 'GET /api/links/:id', 'DELETE /api/links/:id']);
 
 export type AdminDeps = {
   config: Config;
   shares: Shares;
   settings: Settings;
+  tokens: Tokens;
   storage: Storage;
   updates: Updates;
+  providers: Providers;
+  notifier: Notifier;
   setupCode: string | null;
   staticRoot?: string;
 };
-
-export function allowList(cidrs: string[]): net.BlockList {
-  const list = new net.BlockList();
-  for (const cidr of cidrs) {
-    const [address = '', prefix] = cidr.split('/');
-    const type = net.isIPv6(address) ? 'ipv6' : 'ipv4';
-    list.addSubnet(address, Number(prefix ?? (type === 'ipv6' ? 128 : 32)), type);
-  }
-  return list;
-}
-
-export function isAllowed(list: net.BlockList, ip: string): boolean {
-  const plain = ip.replace(/^::ffff:/, '');
-  return list.check(plain, net.isIPv6(plain) ? 'ipv6' : 'ipv4');
-}
 
 export function generateSetupCode(): string {
   const raw = crypto.randomBytes(5).toString('hex').toUpperCase();
   return `${raw.slice(0, 5)}-${raw.slice(5)}`;
 }
 
-export async function buildAdmin({ config, shares, settings, storage, updates, setupCode, staticRoot }: AdminDeps) {
+export async function buildAdmin({
+  config,
+  shares,
+  settings,
+  tokens,
+  storage,
+  updates,
+  providers,
+  notifier,
+  setupCode,
+  staticRoot,
+}: AdminDeps) {
   const app = Fastify({
     logger: { level: config.logLevel },
     trustProxy: config.trustedProxies.length ? config.trustedProxies : false,
@@ -78,6 +86,8 @@ export async function buildAdmin({ config, shares, settings, storage, updates, s
   app.setSerializerCompiler(serializerCompiler);
 
   const allowed = allowList(config.adminAllow);
+  const owners = new WeakMap<FastifyRequest, TokenOwner>();
+  const ownerOf = (request: FastifyRequest) => owners.get(request)?.id;
   let pendingSetupCode = settings.hasAdminPassword() ? null : setupCode;
 
   await app.register(fastifyCookie);
@@ -113,6 +123,17 @@ export async function buildAdmin({ config, shares, settings, storage, updates, s
     const route = request.routeOptions.url;
     if (!route?.startsWith('/api/')) return;
     reply.header('cache-control', 'no-store');
+    // A request carrying a token is the token's alone: the cookie is not looked at. No anti-CSRF header either,
+    // since a browser cannot add an Authorization header to a cross-site request without CORS, which is off.
+    // Other schemes (a proxy's Basic credentials) fall through to the cookie, which still needs the header.
+    const authorization = request.headers.authorization ?? '';
+    if (/^bearer\s/i.test(authorization)) {
+      const owner = tokens.verify(/^bearer\s+(\S+)$/i.exec(authorization)?.[1] ?? '');
+      if (!owner) return reply.code(401).send({ error: 'invalid_token' });
+      if (!TOKEN_ROUTES.has(`${request.method} ${route}`)) return reply.code(403).send({ error: 'token_scope' });
+      owners.set(request, owner);
+      return;
+    }
     if (request.method !== 'GET' && request.headers[CSRF_HEADER] !== '1')
       return reply.code(403).send({ error: 'csrf' });
     if (!OPEN_ROUTES.has(route) && !settings.isValidSession(request.cookies[SESSION_COOKIE])) {
@@ -248,18 +269,62 @@ export async function buildAdmin({ config, shares, settings, storage, updates, s
     return reply.code(202).send(updates.info());
   });
 
+  app.get('/api/providers', async () => providers.info());
+  app.patch('/api/providers', { schema: { body: providersBody } }, async (request) => {
+    providers.setEnabled(request.body.enabled);
+    return providers.info();
+  });
+  app.post('/api/providers/refresh', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async () => {
+    // Answers at once: the download takes a while on a Pi, the page polls the state.
+    void providers.refresh().catch(() => undefined);
+    return providers.info();
+  });
+
+  app.get('/api/notifications', async () => notifier.view());
+  app.patch('/api/notifications', { schema: { body: notificationsBody } }, async (request) =>
+    notifier.update(request.body),
+  );
+  app.post(
+    '/api/notifications/test',
+    { schema: { body: notificationTestBody }, config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } },
+    async (request) => notifier.test(request.body.channel),
+  );
+
+  const tokenParams = z.object({ id: z.string().regex(/^[\w-]{12}$/) });
+
+  app.get('/api/tokens', async () => tokens.list());
+  app.post('/api/tokens', { schema: { body: createTokenBody } }, async (request, reply) =>
+    reply.code(201).send(tokens.create(request.body)),
+  );
+  app.delete('/api/tokens/:id', { schema: { params: tokenParams } }, async (request, reply) => {
+    tokens.remove(request.params.id);
+    return reply.code(204).send();
+  });
+
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 
-  app.get('/api/links', async () => shares.list());
-  app.post('/api/links', { schema: { body: createLinkBody } }, async (request, reply) =>
-    reply.code(201).send(await shares.create(request.body, settings.preferences(defaults).onChange)),
+  app.get('/api/links', async (request) => shares.list(ownerOf(request)));
+  // Every password costs a slow key derivation on a small board: a program stuck in a loop must not hog it.
+  const tokenCreates = {
+    max: 30,
+    timeWindow: '1 minute',
+    keyGenerator: (request: FastifyRequest) => ownerOf(request) ?? request.ip,
+    allowList: (request: FastifyRequest) => !owners.has(request),
+  };
+  app.post(
+    '/api/links',
+    { schema: { body: createLinkBody }, config: { rateLimit: tokenCreates } },
+    async (request, reply) =>
+      reply.code(201).send(await shares.create(request.body, settings.preferences(defaults), owners.get(request))),
   );
-  app.get('/api/links/:id', { schema: { params: linkParams } }, async (request) => shares.detail(request.params.id));
+  app.get('/api/links/:id', { schema: { params: linkParams } }, async (request) =>
+    shares.detail(request.params.id, ownerOf(request)),
+  );
   app.patch('/api/links/:id', { schema: { params: linkParams, body: updateLinkBody } }, async (request) =>
     shares.update(request.params.id, request.body),
   );
   app.delete('/api/links/:id', { schema: { params: linkParams } }, async (request, reply) => {
-    shares.remove(request.params.id);
+    shares.remove(request.params.id, ownerOf(request));
     return reply.code(204).send();
   });
 

@@ -17,7 +17,8 @@ import {
 import type { EventType, EventView, LinkItemView } from '../../../shared/api.ts';
 import { countryFlag, formatBytes, formatDateTime } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
-import { parseAgent } from '../../lib/ua.ts';
+import { parseAgent, previewApp } from '../../lib/ua.ts';
+import { Badge } from '../../ui/Badge.tsx';
 
 const ICONS: Record<EventType, { icon: LucideIcon; tone: string }> = {
   preview: { icon: Bot, tone: 'text-muted' },
@@ -32,6 +33,16 @@ const ICONS: Record<EventType, { icon: LucideIcon; tone: string }> = {
   download_failed: { icon: OctagonX, tone: 'text-danger' },
   refused: { icon: Ban, tone: 'text-warn' },
 };
+
+const REFUSALS = {
+  network: 'refused.network',
+  expired: 'refused.expired',
+  exhausted: 'refused.exhausted',
+  disabled: 'refused.disabled',
+  locked: 'refused.locked',
+  paused: 'refused.paused',
+  unavailable: 'refused.unavailable',
+} as const;
 
 export function ActivityList({ events, items }: { events: EventView[]; items: LinkItemView[] }) {
   const { t, lang } = useI18n();
@@ -48,7 +59,13 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
     <ol className="relative flex flex-col">
       {events.map((event) => {
         const { icon: Icon, tone } = ICONS[event.type] ?? { icon: CircleX, tone: 'text-muted' };
-        const agent = parseAgent(event.userAgent);
+        const app = event.type === 'preview' ? previewApp(event.userAgent) : null;
+        const agent = app ? null : parseAgent(event.userAgent);
+        const title = app
+          ? t('notify.preview', { app })
+          : event.type === 'preview'
+            ? t('event.bot')
+            : t(`event.${event.type}`);
         const isDownload = event.type.startsWith('download_');
         const fileName =
           event.path ??
@@ -72,7 +89,7 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
             <div className="min-w-0 flex-1 pt-1">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                 <p className="text-sm font-medium">
-                  {t(`event.${event.type}`)}
+                  {title}
                   {fileName && <span className="font-normal text-muted"> · {fileName}</span>}
                 </p>
                 <time className="text-xs text-muted tabular" dateTime={new Date(event.at).toISOString()}>
@@ -85,12 +102,23 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
                     {countryFlag(event.country)} {event.ip}
                   </span>
                 )}
+                {event.provider && (
+                  <span title={`AS${event.provider.asn}`} className="flex items-center gap-1.5">
+                    {event.provider.name}
+                    {event.provider.hosting && <Badge tone="warn">{t('provider.hosting')}</Badge>}
+                  </span>
+                )}
                 {agent && <span>{[agent.browser, agent.os].filter(Boolean).join(' · ')}</span>}
                 {language && <span>{language}</span>}
                 {event.bytes !== null && event.type !== 'download_started' && (
                   <span className="tabular">{formatBytes(event.bytes, lang)}</span>
                 )}
-                {event.detail && <span className="font-mono">{event.detail}</span>}
+                {event.detail &&
+                  (event.type === 'refused' && event.detail in REFUSALS ? (
+                    <span>{t(REFUSALS[event.detail as keyof typeof REFUSALS])}</span>
+                  ) : (
+                    <span className="font-mono">{event.detail}</span>
+                  ))}
               </p>
             </div>
           </li>

@@ -47,6 +47,8 @@ const schema = z
       .string()
       .regex(/^[\w.-]+\/[\w.-]+$/)
       .default('ontech7/pi-share'),
+    PROVIDER_LOOKUP: flag(true),
+    PROVIDER_DATA_URL: z.url().default('https://iptoasn.com/data/ip2asn-combined.tsv.gz'),
     UPDATE_REQUEST_DIR: z.string().default(''),
     UPDATE_STATUS_DIR: z.string().default(''),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'silent']).default('info'),
@@ -56,6 +58,7 @@ const schema = z
     dataDir: env.DATA_DIR,
     dbFile: path.join(env.DATA_DIR, 'share.db'),
     masterKeyFile: path.join(env.DATA_DIR, 'master.key'),
+    providerFile: path.join(env.DATA_DIR, 'ip2asn.tsv.gz'),
     publicUrl: env.PUBLIC_URL.replace(/\/+$/, ''),
     adminListen: env.ADMIN_LISTEN,
     brokerListen: env.BROKER_LISTEN,
@@ -76,6 +79,8 @@ const schema = z
     logLevel: env.LOG_LEVEL,
     updateCheck: env.UPDATE_CHECK,
     updateRepo: env.UPDATE_REPO,
+    providerLookup: env.PROVIDER_LOOKUP,
+    providerDataUrl: env.PROVIDER_DATA_URL,
     updateRequestDir: env.UPDATE_REQUEST_DIR,
     updateStatusDir: env.UPDATE_STATUS_DIR,
     eventRetentionDays: env.EVENT_RETENTION_DAYS,

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import type { BrowseEntry, ChangePolicy, LinkDetail, Preferences } from '../../../shared/api.ts';
 import { formatBytes } from '../../lib/format.ts';
+import type { MessageKey } from '../../lib/i18n.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Button } from '../../ui/Button.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
@@ -12,6 +13,7 @@ import { Dialog } from '../../ui/Dialog.tsx';
 import { Field } from '../../ui/Field.tsx';
 import { ApiError, api, keys } from '../api.ts';
 import { FilePicker } from './FilePicker.tsx';
+import { NetworksField, networksProblem, splitNetworks } from './NetworksField.tsx';
 import { PolicyPicker } from './PolicyPicker.tsx';
 import { generatePassword } from './password.ts';
 
@@ -37,6 +39,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
   const [maxDownloads, setMaxDownloads] = useState('');
   const [sensitive, setSensitive] = useState<string[] | null>(null);
   const [onChange, setOnChange] = useState<ChangePolicy>('pause');
+  const [networks, setNetworks] = useState('');
   const [created, setCreated] = useState<LinkDetail | null>(null);
   const preferences = useQuery({ queryKey: keys.preferences, queryFn: api.preferences, enabled: open });
 
@@ -57,6 +60,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
     setStep('files');
     setSelected(new Map());
     setLabel('');
+    setNetworks('');
     setSensitive(null);
     setCreated(null);
   };
@@ -75,6 +79,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
         expiresAt: expiryDays ? Date.now() + expiryDays * 86_400_000 : null,
         maxDownloads: maxDownloads ? Number(maxDownloads) : null,
         onChange,
+        allowedNetworks: splitNetworks(networks),
         confirmSensitive,
       }),
     onSuccess: (link) => {
@@ -130,7 +135,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
         <Button
           variant="primary"
           loading={create.isPending}
-          disabled={password.length > 0 && password.length < 4}
+          disabled={(password.length > 0 && password.length < 4) || networksProblem(networks) !== null}
           icon={<Link2 className="size-4" />}
           onClick={() => create.mutate(false)}
         >
@@ -247,6 +252,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
             onChange={(event) => setMaxDownloads(event.target.value.replace(/\D/g, ''))}
           />
           <PolicyPicker value={onChange} onChange={setOnChange} />
+          <NetworksField value={networks} onChange={setNetworks} />
           {create.isError && !sensitive && (
             <p className="text-sm text-danger" role="alert">
               {t('common.error')}
@@ -306,11 +312,19 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
   );
 }
 
-export function ExpiryPicker({ value, onChange }: { value: number; onChange: (days: number) => void }) {
+export function ExpiryPicker({
+  value,
+  onChange,
+  presets = EXPIRY_PRESETS,
+}: {
+  value: number;
+  onChange: (days: number) => void;
+  presets?: readonly { days: number; key: MessageKey }[];
+}) {
   const { t } = useI18n();
   return (
     <div className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1">
-      {EXPIRY_PRESETS.map((preset) => (
+      {presets.map((preset) => (
         <button
           key={preset.days}
           type="button"

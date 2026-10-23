@@ -6,6 +6,8 @@ import {
   Folder,
   Lock,
   LockOpen,
+  MessageSquareWarning,
+  Network,
   Pencil,
   RefreshCw,
   Trash2,
@@ -14,8 +16,9 @@ import {
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import type { ChangeView, LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
-import { formatBytes, formatDate } from '../../lib/format.ts';
+import { formatBytes, formatDate, formatDateTime } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
+import { previewApp } from '../../lib/ua.ts';
 import { Button } from '../../ui/Button.tsx';
 import { Card } from '../../ui/Card.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
@@ -114,6 +117,7 @@ export function LinkScreen({ id }: { id: string }) {
               <span>
                 {t('detail.expires')} {data.expiresAt ? formatDate(data.expiresAt, lang) : t('common.never')}
               </span>
+              {data.createdBy && <span className="break-all">{t('detail.createdBy', { name: data.createdBy })}</span>}
               {data.maxDownloads && (
                 <span className="flex items-center gap-1 tabular">
                   <Users className="size-3.5" />
@@ -128,6 +132,12 @@ export function LinkScreen({ id }: { id: string }) {
                 {data.hasPassword ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
                 {t('detail.password')}: {data.hasPassword ? t('detail.passwordSet') : t('detail.passwordNone')}
               </span>
+              {data.allowedNetworks.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <Network className="size-3.5" />
+                  <span className="font-mono">{data.allowedNetworks.join(', ')}</span>
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-3 rounded-full border border-line bg-surface py-1 pr-1 pl-4">
@@ -159,6 +169,8 @@ export function LinkScreen({ id }: { id: string }) {
           </Button>
         </div>
       </Card>
+
+      <PastedInChats link={data} />
 
       {data.state === 'locked' && (
         <Card className="flex flex-wrap items-center justify-between gap-3 border-danger/40 p-4">
@@ -243,6 +255,36 @@ export function LinkScreen({ id }: { id: string }) {
 
       {editing && <EditLinkDialog link={data} open={editing} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+/**
+ * A chat that shows a preview of the link holds the whole of it, key included, for as long as the message
+ * stays: everyone who can read that chat can open the files, and so can the service unless it is end-to-end
+ * encrypted.
+ */
+function PastedInChats({ link }: { link: LinkDetail }) {
+  const { t, lang } = useI18n();
+  // Only a chat app it can name: anyone who knows the link id can fetch it with curl, without the key.
+  const previews = link.events.filter((event) => event.type === 'preview' && previewApp(event.userAgent));
+  if (previews.length === 0) return null;
+  const known = [...new Set(previews.map((event) => previewApp(event.userAgent) as string))];
+  const apps = new Intl.ListFormat(lang, { type: 'conjunction' }).format(known);
+  // Non-breaking spaces keep the date and time on one line when the title wraps.
+  const when = formatDateTime(Math.max(...previews.map((event) => event.at)), lang, { seconds: false }).replace(
+    / /g,
+    '\u00a0',
+  );
+  return (
+    <Card className="flex gap-3 border-warn/40 p-4">
+      <MessageSquareWarning className="mt-0.5 size-5 shrink-0 text-warn" />
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className="text-[15px] font-medium">{t('detail.pastedTitle', { apps, when })}</p>
+        <p className="max-w-prose text-sm text-muted">
+          {t('detail.pastedBody')} {!link.hasPassword && t('detail.pastedNoPassword')}
+        </p>
+      </div>
+    </Card>
   );
 }
 

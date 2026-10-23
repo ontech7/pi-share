@@ -270,11 +270,12 @@ Every push runs these checks, and they must pass before anything is merged:
 ## API for your programs
 
 Create a token in **Settings → Integrations**: give it a name, an expiry (or none, with a warning) and copy it,
-since it is shown once. pi-share keeps only its hash. Send it as a bearer token from a network in `ADMIN_ALLOW`:
+since it is shown once. pi-share keeps only its hash. Send it as a bearer token from a network in `ADMIN_ALLOW`,
+through the HTTPS proxy in front of the admin unless the program runs on the same host:
 
 ```sh
 curl -H "Authorization: Bearer pis_…" -H "Content-Type: application/json" \
-  -d '{"paths": ["Work/photo.jpg"], "password": "1234"}' http://localhost:8080/api/links
+  -d '{"paths": ["Work/photo.jpg"], "password": "1234"}' https://share.example.lan/api/links
 ```
 
 | Request                 | What it does                                                                          |
@@ -286,7 +287,7 @@ curl -H "Authorization: Bearer pis_…" -H "Content-Type: application/json" \
 
 Settings left out of a new link come from **Settings → New links**. Any other request answers `403 token_scope`;
 an unknown, expired or revoked token gets `401 invalid_token`. A file on the sensitive list is refused with
-`409 sensitive` unless the request sets `confirmSensitive`. The answer of a create holds the link's key: keep it
+`409 sensitive`: only the admin can confirm one. A token may create up to 30 links a minute. The answer of a create holds the link's key: keep it
 out of logs, and out of anything you would not hand the link to.
 
 ## Configuration

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import type { BrowseEntry, ChangePolicy, LinkDetail, Preferences } from '../../../shared/api.ts';
 import { formatBytes } from '../../lib/format.ts';
+import type { MessageKey } from '../../lib/i18n.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Button } from '../../ui/Button.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
@@ -311,11 +312,19 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
   );
 }
 
-export function ExpiryPicker({ value, onChange }: { value: number; onChange: (days: number) => void }) {
+export function ExpiryPicker({
+  value,
+  onChange,
+  presets = EXPIRY_PRESETS,
+}: {
+  value: number;
+  onChange: (days: number) => void;
+  presets?: readonly { days: number; key: MessageKey }[];
+}) {
   const { t } = useI18n();
   return (
     <div className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1">
-      {EXPIRY_PRESETS.map((preset) => (
+      {presets.map((preset) => (
         <button
           key={preset.days}
           type="button"

@@ -17,7 +17,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - A link previewed by a chat app says which one, and that the chat now holds the whole link.
 - Integration tokens (**Settings → Integrations**): named, with an expiry or none, shown once and stored as a hash,
   revocable. A token can create links and see or delete the ones it created, nothing else; its links show which
-  token made them.
+  token made them. Files on the sensitive list can be shared only from the admin, and a token creates at most 30
+  links a minute.
 
 ### Changed
 

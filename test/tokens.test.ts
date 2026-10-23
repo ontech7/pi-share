@@ -1,13 +1,25 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CreatedToken, LinkDetail, LinkSummary, TokenView } from '../src/shared/api.ts';
+import { tempDir } from './helpers.ts';
 import { startStack } from './stack.ts';
 
 let stack: Awaited<ReturnType<typeof startStack>>;
 
 beforeAll(async () => {
+  const sensitive = path.join(tempDir(), 'sensitive.txt');
+  const contract = 'signed contract';
+  fs.writeFileSync(sensitive, `${crypto.createHash('sha256').update(contract).digest('hex')} ${contract.length}\n`);
   stack = await startStack(
-    { 'Work/photo.jpg': 'jpeg', 'Work/notes.txt': 'notes', 'Private/diary.txt': 'diary' },
-    { ADMIN_ALLOW: '127.0.0.1/32' },
+    {
+      'Work/photo.jpg': 'jpeg',
+      'Work/notes.txt': 'notes',
+      'Private/diary.txt': 'diary',
+      'Work/contract.txt': contract,
+    },
+    { ADMIN_ALLOW: '127.0.0.1/32', SENSITIVE_FILE: sensitive },
   );
 });
 
@@ -136,13 +148,31 @@ describe('integration tokens', () => {
       const response = await withToken(token, 'GET', '/api/links', undefined, { cookie });
       expect(response.status, token).toBe(401);
     }
-    for (const authorization of [`Basic ${valid.token}`, valid.token, `Bearer  ${valid.token}`]) {
-      const response = await stack.admin.inject({
+    // Another scheme is not a token: the request is judged by its cookie, which still needs the anti-CSRF header.
+    for (const authorization of [`Basic ${valid.token}`, valid.token]) {
+      const asCookie = await stack.admin.inject({
         method: 'GET',
-        url: '/api/links',
+        url: '/api/tokens',
         headers: { authorization, cookie },
       });
-      expect(response.statusCode, authorization).toBe(401);
+      expect(asCookie.statusCode, authorization).toBe(200);
+      const bare = await stack.admin.inject({ method: 'GET', url: '/api/links', headers: { authorization } });
+      expect(bare.statusCode, authorization).toBe(401);
+      const forged = await stack.admin.inject({
+        method: 'POST',
+        url: '/api/links',
+        headers: { authorization, cookie },
+        payload: { paths: ['Work/notes.txt'] },
+      });
+      expect(forged.statusCode, authorization).toBe(403);
+    }
+    for (const authorization of [`bearer ${valid.token}`, `Bearer  ${valid.token}`]) {
+      const scoped = await stack.admin.inject({
+        method: 'GET',
+        url: '/api/tokens',
+        headers: { authorization, cookie },
+      });
+      expect(scoped.statusCode, authorization).toBe(403);
     }
 
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -153,6 +183,31 @@ describe('integration tokens', () => {
     expect((await withToken(valid.token, 'GET', '/api/links')).status).toBe(401);
     expect((await stack.adminCall('GET', `/api/links/${kept.id}`)).body).toMatchObject({ createdBy: 'revoked' });
     expect((await stack.adminCall('DELETE', `/api/tokens/${valid.id}`)).status).toBe(404);
+  });
+
+  it('cannot confirm a file on the sensitive list, only the admin can', async () => {
+    const { token } = await newToken('sensitive');
+    for (const confirmSensitive of [false, true]) {
+      const refused = await withToken(token, 'POST', '/api/links', { paths: ['Work'], confirmSensitive });
+      expect(refused).toMatchObject({ status: 409, body: { error: 'sensitive', files: ['Work/contract.txt'] } });
+    }
+    const byHand = await stack.adminCall('POST', '/api/links', {
+      paths: ['Work/contract.txt'],
+      confirmSensitive: true,
+    });
+    expect(byHand.status).toBe(201);
+  });
+
+  it('creates at most 30 links a minute', async () => {
+    const { token } = await newToken('loop');
+    const statuses = [];
+    for (let i = 0; i < 31; i++)
+      statuses.push((await withToken(token, 'POST', '/api/links', { paths: ['Work/notes.txt'] })).status);
+    expect(statuses.slice(0, 30).every((status) => status === 201)).toBe(true);
+    expect(statuses[30]).toBe(429);
+    expect((await stack.adminCall('POST', '/api/links', { paths: ['Work/notes.txt'] })).status).toBe(201);
+    const other = await newToken('not looping');
+    expect((await withToken(other.token, 'POST', '/api/links', { paths: ['Work/notes.txt'] })).status).toBe(201);
   });
 
   it('is never read from the query string', async () => {

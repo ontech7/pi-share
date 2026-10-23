@@ -116,8 +116,10 @@ export class Shares {
 
   async create(input: CreateLinkBody, defaults: LinkDefaults, owner?: TokenOwner): Promise<LinkDetail> {
     const body = createLinkBody.parse(input);
-    const { items, flagged } = this.resolveItems(body.paths, body.confirmSensitive);
-    if (flagged.length && !body.confirmSensitive) throw new ShareError(409, 'sensitive', { files: flagged });
+    // Only a person in the admin may confirm a file on the sensitive list, never a program holding a token.
+    const confirmed = body.confirmSensitive && !owner;
+    const { items, flagged } = this.resolveItems(body.paths, confirmed);
+    if (flagged.length && !confirmed) throw new ShareError(409, 'sensitive', { files: flagged });
 
     const id = randomId(16);
     const key = crypto.randomBytes(32);

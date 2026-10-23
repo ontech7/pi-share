@@ -125,9 +125,10 @@ export async function buildAdmin({
     reply.header('cache-control', 'no-store');
     // A request carrying a token is the token's alone: the cookie is not looked at. No anti-CSRF header either,
     // since a browser cannot add an Authorization header to a cross-site request without CORS, which is off.
-    const authorization = request.headers.authorization;
-    if (authorization !== undefined) {
-      const owner = tokens.verify(/^Bearer (\S+)$/.exec(authorization)?.[1] ?? '');
+    // Other schemes (a proxy's Basic credentials) fall through to the cookie, which still needs the header.
+    const authorization = request.headers.authorization ?? '';
+    if (/^bearer\s/i.test(authorization)) {
+      const owner = tokens.verify(/^bearer\s+(\S+)$/i.exec(authorization)?.[1] ?? '');
       if (!owner) return reply.code(401).send({ error: 'invalid_token' });
       if (!TOKEN_ROUTES.has(`${request.method} ${route}`)) return reply.code(403).send({ error: 'token_scope' });
       owners.set(request, owner);
@@ -303,8 +304,18 @@ export async function buildAdmin({
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 
   app.get('/api/links', async (request) => shares.list(ownerOf(request)));
-  app.post('/api/links', { schema: { body: createLinkBody } }, async (request, reply) =>
-    reply.code(201).send(await shares.create(request.body, settings.preferences(defaults), owners.get(request))),
+  // Every password costs a slow key derivation on a small board: a program stuck in a loop must not hog it.
+  const tokenCreates = {
+    max: 30,
+    timeWindow: '1 minute',
+    keyGenerator: (request: FastifyRequest) => ownerOf(request) ?? request.ip,
+    allowList: (request: FastifyRequest) => !owners.has(request),
+  };
+  app.post(
+    '/api/links',
+    { schema: { body: createLinkBody }, config: { rateLimit: tokenCreates } },
+    async (request, reply) =>
+      reply.code(201).send(await shares.create(request.body, settings.preferences(defaults), owners.get(request))),
   );
   app.get('/api/links/:id', { schema: { params: linkParams } }, async (request) =>
     shares.detail(request.params.id, ownerOf(request)),

@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import clsx from 'clsx';
 import { CircleAlert, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { type CreatedToken, MAX_TOKENS, type TokenView } from '../../../shared/api.ts';
@@ -14,6 +13,7 @@ import { Field } from '../../ui/Field.tsx';
 import { Spinner } from '../../ui/Spinner.tsx';
 import { useToast } from '../../ui/Toaster.tsx';
 import { api, keys } from '../api.ts';
+import { ExpiryPicker } from '../create/CreateLinkDialog.tsx';
 
 const TOKEN_EXPIRY: { days: number; key: MessageKey }[] = [
   { days: 30, key: 'create.expiry30' },
@@ -62,7 +62,7 @@ function CreateToken({ full, onCreated }: { full: boolean; onCreated: (token: Cr
   const [name, setName] = useState('');
   const [days, setDays] = useState(90);
   const create = useMutation({
-    mutationFn: () => api.createToken({ name, expiresAt: days ? Date.now() + days * 86_400_000 : null }),
+    mutationFn: () => api.createToken({ name: name.trim(), expiresAt: days ? Date.now() + days * 86_400_000 : null }),
     onSuccess: (token) => {
       setName('');
       onCreated(token);
@@ -91,22 +91,7 @@ function CreateToken({ full, onCreated }: { full: boolean; onCreated: (token: Cr
         />
         <div className="flex flex-col gap-1.5">
           <p className="text-sm font-medium">{t('create.expiry')}</p>
-          <div className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1">
-            {TOKEN_EXPIRY.map((preset) => (
-              <button
-                key={preset.days}
-                type="button"
-                aria-pressed={days === preset.days}
-                onClick={() => setDays(preset.days)}
-                className={clsx(
-                  'press h-9 rounded-lg text-sm font-medium transition-colors',
-                  days === preset.days ? 'bg-surface text-fg shadow-card' : 'text-muted hover:text-fg',
-                )}
-              >
-                {t(preset.key)}
-              </button>
-            ))}
-          </div>
+          <ExpiryPicker value={days} onChange={setDays} presets={TOKEN_EXPIRY} />
           {days === 0 && (
             <p className="flex animate-enter gap-2 text-sm text-warn">
               <CircleAlert className="mt-0.5 size-4 shrink-0" />
@@ -125,7 +110,7 @@ function CreateToken({ full, onCreated }: { full: boolean; onCreated: (token: Cr
           variant="primary"
           icon={<Plus className="size-4" />}
           loading={create.isPending}
-          disabled={full || !name.trim()}
+          disabled={full}
           className="self-start"
         >
           {t('tokens.create')}
@@ -141,7 +126,9 @@ function NewToken({ token, onDone }: { token: CreatedToken; onDone: () => void }
     <Card className="flex animate-enter flex-col gap-3 p-4 ring-1 ring-accent-strong/30 sm:p-5">
       <div className="flex items-center gap-2">
         <KeyRound className="size-4 text-accent-strong" />
-        <h3 className="text-[15px] font-medium">{t('tokens.createdTitle', { name: token.name })}</h3>
+        <h3 className="min-w-0 text-[15px] font-medium break-words">
+          {t('tokens.createdTitle', { name: token.name })}
+        </h3>
       </div>
       <p className="text-sm text-muted">{t('tokens.createdHint')}</p>
       <code className="break-all rounded-xl border border-line bg-surface-2 px-3 py-2.5 font-mono text-sm select-all">
@@ -190,9 +177,11 @@ function TokenRow({ token }: { token: TokenView }) {
             </span>
           )}
           <span>
-            {token.lastUsedAt
-              ? t('tokens.lastUsed', { when: formatRelative(token.lastUsedAt, lang) })
-              : t('tokens.neverUsed')}
+            {token.lastUsedAt === null
+              ? t('tokens.neverUsed')
+              : Date.now() - token.lastUsedAt < 60_000
+                ? t('tokens.usedJustNow')
+                : t('tokens.lastUsed', { when: formatRelative(token.lastUsedAt, lang) })}
           </span>
         </p>
       </div>

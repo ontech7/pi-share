@@ -47,6 +47,7 @@ const env = {
   LOG_LEVEL: 'warn',
   // Offline and deterministic by default; E2E_UPDATES=1 checks the real GitHub releases.
   UPDATE_CHECK: process.env.E2E_UPDATES ? 'true' : 'false',
+  PROVIDER_LOOKUP: 'false',
 };
 
 const processes = [];
@@ -277,8 +278,14 @@ try {
   assert(share.errors.length === 0, `recipient page without errors ${share.errors.join(' | ')}`);
 
   console.log('activity');
+  // What Discord does when the link is pasted into a chat: fetch the page for its preview.
+  await fetch(`http://localhost:18787${new URL(url).pathname}`, {
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+  });
   await panel.go(`${ADMIN}${await panel.eval('location.pathname')}`);
   await panel.text('Downloaded and verified');
+  await panel.text('Pasted into Discord');
+  assert(true, 'a link previewed by a chat app is flagged');
   const counts = await panel.eval(`[...document.querySelectorAll('dl dd')].map((d) => d.textContent)`);
   assert(JSON.stringify(counts) === JSON.stringify(['1', '2', '2', '1', '1']), `counters ${counts.join(', ')}`);
   await panel.shot('07-activity');
@@ -292,6 +299,21 @@ try {
   await panel.shot('08-folder-picker');
   await panel.click('Continue');
   await panel.click('Follow the changes');
+  await panel.type('dialog textarea', 'not a network');
+  await panel.text('Not an address or a range');
+  assert(
+    await panel.eval(
+      `[...document.querySelectorAll('dialog button')].find((b) => b.textContent.includes('Create link')).disabled`,
+    ),
+    'an invalid network blocks the link',
+  );
+  await panel.eval(`(() => {
+    const area = document.querySelector('dialog textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, '');
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await panel.type('dialog textarea', '127.0.0.1\n::1');
+  await panel.shot('08-folder-networks');
   await panel.click('Create link');
   await panel.text('Link ready');
   const folderUrl = await panel.eval(
@@ -319,6 +341,22 @@ try {
   await until(() => fs.existsSync(path.join(downloads, 'Work.zip')), 'folder zip on disk');
   assert(folder.errors.length === 0, `folder page without errors ${folder.errors.join(' | ')}`);
 
+  console.log('networks');
+  const restricted = await panel.eval(`fetch('/api/links', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-pi-share': '1' },
+    body: JSON.stringify({ paths: ['Work/notes.txt'], label: 'VPN only', allowedNetworks: ['203.0.113.0/24'] }),
+  }).then((r) => r.json())`);
+  const outside = await openPage(restricted.url, folderContext.browserContextId);
+  await outside.text('Not available from this network', 20_000);
+  assert(true, 'a link restricted to other networks tells the recipient why');
+  await outside.shot('14-network-refused');
+  await outside.shot('14-network-refused-mobile', { width: 390, height: 844, mobile: true });
+  await panel.go(`${ADMIN}/links/${restricted.id}`);
+  await panel.text('203.0.113.0/24');
+  await panel.text('network');
+  await panel.shot('15-network-activity');
+
   console.log('settings');
   await panel.go(`${ADMIN}/settings`);
   await panel.text('Public page on');
@@ -331,6 +369,13 @@ try {
   await panel.shot('10-settings-mobile', { width: 390, height: 844, mobile: true });
   const saved = await panel.eval(`fetch('/api/preferences').then((r) => r.json())`);
   assert(saved.onChange === 'follow', 'settings page saves the defaults for new links');
+
+  await panel.click('Activity');
+  await panel.text('Show the provider');
+  await panel.eval(`document.querySelector('[role=switch][aria-label="Telegram"]').click()`);
+  await panel.text('Bot token');
+  await panel.shot('13-activity');
+  await panel.shot('13-activity-mobile', { width: 390, height: 1600, mobile: true });
 
   await panel.click('Updates');
   await panel.text('Installed version');

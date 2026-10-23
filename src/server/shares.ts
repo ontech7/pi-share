@@ -9,6 +9,7 @@ import type {
   LinkDetail,
   LinkState,
   LinkSummary,
+  Provider,
   UpdateLinkBody,
 } from '../shared/api.ts';
 import { createLinkBody, updateLinkBody } from '../shared/api.ts';
@@ -78,6 +79,9 @@ export type SharesDeps = {
   sensitive: SensitiveList;
   publicUrl: string;
   maxPasswordFailures: number;
+  providerOf?: (ip: string | null) => Provider | null;
+  /** Told about every event after it is saved, with the link it belongs to. */
+  onEvent?: (link: { id: string; label: string }, event: NewEvent) => void;
 };
 
 export class Shares {
@@ -87,6 +91,8 @@ export class Shares {
   private readonly sensitive: SensitiveList;
   private readonly publicUrl: string;
   private readonly maxPasswordFailures: number;
+  private readonly providerOf: (ip: string | null) => Provider | null;
+  private readonly onEvent: SharesDeps['onEvent'];
   private readonly content: ContentDeps;
   /** Bumped on every change to links, so cached views of them can tell they are stale. */
   revision = 0;
@@ -98,6 +104,8 @@ export class Shares {
     this.sensitive = deps.sensitive;
     this.publicUrl = deps.publicUrl;
     this.maxPasswordFailures = deps.maxPasswordFailures;
+    this.providerOf = deps.providerOf ?? (() => null);
+    this.onEvent = deps.onEvent;
     this.content = { storage: deps.storage, sensitive: deps.sensitive };
   }
 
@@ -223,7 +231,8 @@ export class Shares {
       url: this.url(row),
       changes: content.changes.slice(0, MAX_CHANGES),
       version: content.version,
-      events: history.map(({ linkId: _, ...event }) => event as EventView),
+      // Looked up now rather than stored, so older activity gets a provider too once the table is there.
+      events: history.map(({ linkId: _, ...event }): EventView => ({ ...event, provider: this.providerOf(event.ip) })),
     };
   }
 
@@ -386,6 +395,10 @@ export class Shares {
         counted: event.counted ?? false,
       })
       .run();
+    if (this.onEvent) {
+      const link = this.db.select({ id: links.id, label: links.label }).from(links).where(eq(links.id, linkId)).get();
+      if (link) this.onEvent(link, event);
+    }
   }
 
   private startedDownload(linkId: string, downloadId: string) {

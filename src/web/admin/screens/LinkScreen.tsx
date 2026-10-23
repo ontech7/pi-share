@@ -6,6 +6,7 @@ import {
   Folder,
   Lock,
   LockOpen,
+  MessageSquareWarning,
   Network,
   Pencil,
   RefreshCw,
@@ -15,8 +16,9 @@ import {
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import type { ChangeView, LinkDetail, UpdateLinkBody } from '../../../shared/api.ts';
-import { formatBytes, formatDate } from '../../lib/format.ts';
+import { formatBytes, formatDate, formatDateTime } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
+import { previewApp } from '../../lib/ua.ts';
 import { Button } from '../../ui/Button.tsx';
 import { Card } from '../../ui/Card.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
@@ -169,6 +171,8 @@ export function LinkScreen({ id }: { id: string }) {
         </div>
       </Card>
 
+      <PastedInChats link={data} />
+
       {data.state === 'locked' && (
         <Card className="flex flex-wrap items-center justify-between gap-3 border-danger/40 p-4">
           <p className="text-sm">{t('event.locked')}</p>
@@ -252,6 +256,32 @@ export function LinkScreen({ id }: { id: string }) {
 
       {editing && <EditLinkDialog link={data} open={editing} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+/**
+ * A chat that shows a preview of the link holds the whole of it, key included, for as long as the message
+ * stays: everyone who can read that chat can open the files, and so can the service unless it is end-to-end
+ * encrypted.
+ */
+function PastedInChats({ link }: { link: LinkDetail }) {
+  const { t, lang } = useI18n();
+  const previews = link.events.filter((event) => event.type === 'preview');
+  if (previews.length === 0) return null;
+  const apps = [...new Set(previews.map((event) => previewApp(event.userAgent) ?? t('notify.chatApp')))];
+  const last = Math.max(...previews.map((event) => event.at));
+  return (
+    <Card className="flex gap-3 border-warn/40 p-4">
+      <MessageSquareWarning className="mt-0.5 size-5 shrink-0 text-warn" />
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className="text-[15px] font-medium">
+          {t('detail.pastedTitle', { apps: apps.join(', '), when: formatDateTime(last, lang) })}
+        </p>
+        <p className="text-sm text-muted">
+          {t('detail.pastedBody')} {!link.hasPassword && t('detail.pastedNoPassword')}
+        </p>
+      </div>
+    </Card>
   );
 }
 

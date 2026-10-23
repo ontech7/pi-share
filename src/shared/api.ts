@@ -193,6 +193,101 @@ export type LinkSummary = {
   lastActivityAt: number | null;
 };
 
+/** Who runs the network an address belongs to; `hosting` marks clouds, servers and VPN exits. */
+export type Provider = { asn: number; name: string; hosting: boolean };
+
+export type ProviderInfo = {
+  enabled: boolean;
+  /** Address ranges in the table on disk, 0 until the first download. */
+  ranges: number;
+  updatedAt: number | null;
+  error: string | null;
+  updating: boolean;
+};
+export const providersBody = z.object({ enabled: z.boolean() });
+
+export const notificationKinds = ['opens', 'downloads', 'warnings', 'previews'] as const;
+export type NotificationKind = (typeof notificationKinds)[number];
+export const notificationChannels = ['ntfy', 'telegram', 'email'] as const;
+export type NotificationChannel = (typeof notificationChannels)[number];
+export const notificationLangs = ['en', 'it'] as const;
+export const smtpSecurity = ['tls', 'starttls', 'none'] as const;
+
+export type ChannelStatus = { lastSentAt: number | null; lastError: string | null };
+
+/** What the admin sees: secrets only as "one is saved". */
+export type NotificationSettings = {
+  kinds: Record<NotificationKind, boolean>;
+  lang: (typeof notificationLangs)[number];
+  ntfy: { enabled: boolean; server: string; topic: string; hasToken: boolean };
+  telegram: { enabled: boolean; chatId: string; hasToken: boolean };
+  email: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    security: (typeof smtpSecurity)[number];
+    user: string;
+    hasPassword: boolean;
+    from: string;
+    to: string;
+  };
+  status: Record<NotificationChannel, ChannelStatus>;
+};
+
+/** A new secret, or null to forget the one saved. */
+const secret = (max: number) => z.string().trim().min(1).max(max).nullable();
+
+export const notificationsBody = z.object({
+  kinds: z
+    .object({ opens: z.boolean(), downloads: z.boolean(), warnings: z.boolean(), previews: z.boolean() })
+    .partial()
+    .optional(),
+  lang: z.enum(notificationLangs).optional(),
+  ntfy: z
+    .object({
+      enabled: z.boolean(),
+      server: z.url({ protocol: /^https?$/ }).max(200),
+      topic: z.string().regex(/^[\w-]{1,64}$/),
+      token: secret(200),
+    })
+    .partial()
+    .optional(),
+  telegram: z
+    .object({
+      enabled: z.boolean(),
+      /** A numeric chat id (negative for groups) or a public channel's @name. */
+      chatId: z
+        .string()
+        .trim()
+        .regex(/^(-?\d{1,20}|@\w{5,32})$/),
+      token: z
+        .string()
+        .trim()
+        .regex(/^\d{1,20}:[\w-]{20,100}$/)
+        .nullable(),
+    })
+    .partial()
+    .optional(),
+  email: z
+    .object({
+      enabled: z.boolean(),
+      host: z
+        .string()
+        .trim()
+        .regex(/^[a-z\d]([a-z\d.-]{0,251}[a-z\d])?$/i),
+      port: z.number().int().min(1).max(65_535),
+      security: z.enum(smtpSecurity),
+      user: z.string().trim().max(254),
+      password: secret(256),
+      from: z.email().max(254),
+      to: z.email().max(254),
+    })
+    .partial()
+    .optional(),
+});
+export type NotificationsBody = z.input<typeof notificationsBody>;
+export const notificationTestBody = z.object({ channel: z.enum(notificationChannels) });
+
 export type EventView = {
   id: number;
   at: number;
@@ -202,6 +297,7 @@ export type EventView = {
   downloadId: string | null;
   ip: string | null;
   country: string | null;
+  provider: Provider | null;
   userAgent: string | null;
   language: string | null;
   visitor: string | null;

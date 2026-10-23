@@ -17,7 +17,7 @@ import {
 import type { EventType, EventView, LinkItemView } from '../../../shared/api.ts';
 import { countryFlag, formatBytes, formatDateTime } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
-import { parseAgent } from '../../lib/ua.ts';
+import { parseAgent, previewApp } from '../../lib/ua.ts';
 
 const ICONS: Record<EventType, { icon: LucideIcon; tone: string }> = {
   preview: { icon: Bot, tone: 'text-muted' },
@@ -48,7 +48,8 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
     <ol className="relative flex flex-col">
       {events.map((event) => {
         const { icon: Icon, tone } = ICONS[event.type] ?? { icon: CircleX, tone: 'text-muted' };
-        const agent = parseAgent(event.userAgent);
+        const app = event.type === 'preview' ? previewApp(event.userAgent) : null;
+        const agent = app ? null : parseAgent(event.userAgent);
         const isDownload = event.type.startsWith('download_');
         const fileName =
           event.path ??
@@ -72,7 +73,7 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
             <div className="min-w-0 flex-1 pt-1">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                 <p className="text-sm font-medium">
-                  {t(`event.${event.type}`)}
+                  {app ? t('notify.preview', { app }) : t(`event.${event.type}`)}
                   {fileName && <span className="font-normal text-muted"> · {fileName}</span>}
                 </p>
                 <time className="text-xs text-muted tabular" dateTime={new Date(event.at).toISOString()}>
@@ -83,6 +84,16 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
                 {event.ip && (
                   <span className="font-mono">
                     {countryFlag(event.country)} {event.ip}
+                  </span>
+                )}
+                {event.provider && (
+                  <span title={`AS${event.provider.asn}`} className="flex items-center gap-1.5">
+                    {event.provider.name}
+                    {event.provider.hosting && (
+                      <span className="rounded-full bg-warn/12 px-1.5 text-[11px] font-medium text-warn">
+                        {t('provider.hosting')}
+                      </span>
+                    )}
                   </span>
                 )}
                 {agent && <span>{[agent.browser, agent.os].filter(Boolean).join(' · ')}</span>}

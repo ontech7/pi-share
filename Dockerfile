@@ -20,5 +20,7 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/src/server ./src/server
 COPY --from=build /app/src/shared ./src/shared
+# texts and user-agent parsing shared with the notifications the admin sends
+COPY --from=build /app/src/web/lib ./src/web/lib
 USER 10001:10001
 CMD ["node", "src/server/bin/admin.ts"]

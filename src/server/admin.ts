@@ -17,8 +17,11 @@ import {
   createLinkBody,
   installUpdateBody,
   loginBody,
+  notificationsBody,
+  notificationTestBody,
   type Preferences,
   preferencesBody,
+  providersBody,
   type ServiceState,
   type SessionState,
   serviceBody,
@@ -29,6 +32,8 @@ import {
 import { isOnline } from './broker.ts';
 import type { Config } from './config.ts';
 import { allowList, isAllowed } from './network.ts';
+import type { Notifier } from './notify.ts';
+import type { Providers } from './providers.ts';
 import type { Settings } from './settings.ts';
 import { ShareError, type Shares } from './shares.ts';
 import { type Storage, StorageError } from './storage.ts';
@@ -44,6 +49,8 @@ export type AdminDeps = {
   settings: Settings;
   storage: Storage;
   updates: Updates;
+  providers: Providers;
+  notifier: Notifier;
   setupCode: string | null;
   staticRoot?: string;
 };
@@ -53,7 +60,17 @@ export function generateSetupCode(): string {
   return `${raw.slice(0, 5)}-${raw.slice(5)}`;
 }
 
-export async function buildAdmin({ config, shares, settings, storage, updates, setupCode, staticRoot }: AdminDeps) {
+export async function buildAdmin({
+  config,
+  shares,
+  settings,
+  storage,
+  updates,
+  providers,
+  notifier,
+  setupCode,
+  staticRoot,
+}: AdminDeps) {
   const app = Fastify({
     logger: { level: config.logLevel },
     trustProxy: config.trustedProxies.length ? config.trustedProxies : false,
@@ -232,6 +249,27 @@ export async function buildAdmin({ config, shares, settings, storage, updates, s
     updates.requestInstall(request.body.version);
     return reply.code(202).send(updates.info());
   });
+
+  app.get('/api/providers', async () => providers.info());
+  app.patch('/api/providers', { schema: { body: providersBody } }, async (request) => {
+    providers.setEnabled(request.body.enabled);
+    return providers.info();
+  });
+  app.post('/api/providers/refresh', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async () => {
+    // Answers at once: the download takes a while on a Pi, the page polls the state.
+    void providers.refresh().catch(() => undefined);
+    return providers.info();
+  });
+
+  app.get('/api/notifications', async () => notifier.view());
+  app.patch('/api/notifications', { schema: { body: notificationsBody } }, async (request) =>
+    notifier.update(request.body),
+  );
+  app.post(
+    '/api/notifications/test',
+    { schema: { body: notificationTestBody }, config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } },
+    async (request) => notifier.test(request.body.channel),
+  );
 
   const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 

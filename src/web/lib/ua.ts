@@ -38,3 +38,26 @@ export function parseAgent(userAgent: string | null): Agent | null {
   const os = SYSTEMS.find(([pattern]) => pattern.test(userAgent))?.[1] ?? '';
   return { browser, os, mobile: /Mobi|Android|iPhone/.test(userAgent) };
 }
+
+/** Order matters: iMessage announces itself as Facebook and Twitter at once, Teams as Skype. */
+const PREVIEWERS: [RegExp, string][] = [
+  [/facebookexternalhit.*Twitterbot/i, 'iMessage'],
+  [/Discordbot/i, 'Discord'],
+  [/WhatsApp/i, 'WhatsApp'],
+  [/TelegramBot/i, 'Telegram'],
+  [/Slack/i, 'Slack'],
+  [/SkypeUriPreview|Teams/i, 'Teams'],
+  [/facebookexternalhit|Facebot/i, 'Facebook'],
+  [/Twitterbot/i, 'X'],
+  [/LinkedInBot/i, 'LinkedIn'],
+  [/Signal/i, 'Signal'],
+  [/Viber/i, 'Viber'],
+  [/redditbot/i, 'Reddit'],
+  [/Google-PageRenderer|Google-Chat/i, 'Google Chat'],
+];
+
+/** The chat app that fetched a link to show its preview, when the user agent says which. */
+export function previewApp(userAgent: string | null): string | null {
+  if (!userAgent) return null;
+  return PREVIEWERS.find(([pattern]) => pattern.test(userAgent))?.[1] ?? null;
+}

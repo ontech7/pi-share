@@ -1,11 +1,21 @@
 import clsx from 'clsx';
-import { ArrowLeft, ArrowUpCircle, ChevronRight, Link2, type LucideIcon, Radio, UserRound } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowUpCircle,
+  BellRing,
+  ChevronRight,
+  Link2,
+  type LucideIcon,
+  Radio,
+  UserRound,
+} from 'lucide-react';
 import type { ComponentType } from 'react';
 import { Link } from 'wouter';
 import type { MessageKey } from '../../lib/i18n.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { Card } from '../../ui/Card.tsx';
 import { AccountSection } from '../settings/AccountSection.tsx';
+import { ActivitySection } from '../settings/ActivitySection.tsx';
 import { NewLinksSection } from '../settings/NewLinksSection.tsx';
 import { ServiceSection } from '../settings/ServiceSection.tsx';
 import { UpdatesSection } from '../settings/UpdatesSection.tsx';
@@ -28,6 +38,14 @@ const SECTIONS: Section[] = [
     hint: 'settings.newLinksShort',
     intro: 'settings.newLinksHint',
     body: NewLinksSection,
+  },
+  {
+    id: 'activity',
+    icon: BellRing,
+    title: 'settings.activity',
+    hint: 'settings.activityHint',
+    intro: 'settings.activityIntro',
+    body: ActivitySection,
   },
   {
     id: 'updates',

@@ -67,6 +67,23 @@ export class Settings {
     this.set('updates', value);
   }
 
+  providers(enabledDefault: boolean): { enabled: boolean } {
+    const stored = this.get<{ enabled?: unknown }>('providers', {});
+    return { enabled: typeof stored.enabled === 'boolean' ? stored.enabled : enabledDefault };
+  }
+
+  setProviders(value: { enabled: boolean }) {
+    this.set('providers', value);
+  }
+
+  notifications<T>(): T | null {
+    return this.get<T | null>('notifications', null);
+  }
+
+  setNotifications(value: unknown) {
+    this.set('notifications', value);
+  }
+
   hasAdminPassword(): boolean {
     return this.get<string | null>('adminPasswordHash', null) !== null;
   }

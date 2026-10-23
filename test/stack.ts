@@ -7,6 +7,8 @@ import { loadOrCreateKey, Vault } from '../src/server/crypto.ts';
 import { openDatabase } from '../src/server/db/index.ts';
 import { buildEdge } from '../src/server/edge.ts';
 import { listen } from '../src/server/listen.ts';
+import { type Mail, Notifier, type SmtpOptions } from '../src/server/notify.ts';
+import { Providers } from '../src/server/providers.ts';
 import { SensitiveList } from '../src/server/sensitive.ts';
 import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
@@ -19,7 +21,12 @@ import { tempDir, writeFiles } from './helpers.ts';
 export type Visitor = { cookie: string; ip: string; userAgent?: string };
 
 /** Admin, broker (on a unix socket) and edge wired like in production, with an admin session ready. */
-export async function startStack(files: Record<string, string | Buffer>, env: Record<string, string> = {}) {
+/** `providerData` is what the provider download answers: a gzipped iptoasn table. */
+export async function startStack(
+  files: Record<string, string | Buffer>,
+  env: Record<string, string> = {},
+  { providerData }: { providerData?: Buffer } = {},
+) {
   const root = tempDir();
   const storageRoot = path.join(root, 'storage');
   writeFiles(storageRoot, files);
@@ -39,6 +46,42 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
   const vault = new Vault(loadOrCreateKey(config.masterKeyFile));
   const storage = new Storage(config.storageRoot, config.deny, config.hideSystem, 0);
   const settings = new Settings(db);
+  const providers = new Providers({
+    file: config.providerFile,
+    url: config.providerDataUrl,
+    settings,
+    enabledDefault: providerData !== undefined,
+    userAgent: 'pi-share/test',
+    fetch: async () =>
+      providerData ? new Response(new Uint8Array(providerData)) : new Response(null, { status: 503 }),
+  });
+  /** Every notification the stack sends over HTTP (ntfy, Telegram) and by email. */
+  const sent: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+  const mails: { smtp: SmtpOptions; mail: Mail }[] = [];
+  let notifyAnswer = { status: 200, body: '{}' };
+  let mailError: Error | null = null;
+  const failNotifications = (status: number, body = '{}', mail: Error | null = null) => {
+    notifyAnswer = { status, body };
+    mailError = mail;
+  };
+  const notifier = new Notifier({
+    settings,
+    vault,
+    providerOf: (ip) => providers.lookup(ip),
+    lang: 'en',
+    fetch: async (url, init) => {
+      sent.push({
+        url: String(url),
+        headers: init?.headers as Record<string, string>,
+        body: JSON.parse(String(init?.body)),
+      });
+      return new Response(notifyAnswer.body, { status: notifyAnswer.status });
+    },
+    mailer: async (smtp, mail) => {
+      if (mailError) throw mailError;
+      mails.push({ smtp, mail });
+    },
+  });
   const shares = new Shares({
     db,
     storage,
@@ -46,6 +89,8 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
     sensitive: new SensitiveList(config.sensitiveFile),
     publicUrl: config.publicUrl,
     maxPasswordFailures: config.maxPasswordFailures,
+    providerOf: (ip) => providers.lookup(ip),
+    onEvent: (link, event) => notifier.onEvent(link, event),
   });
   await settings.setAdminPassword('correct horse battery');
   // What "GitHub" answers to update checks; tests change it with setRelease.
@@ -61,7 +106,7 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
     requestDir: config.updateRequestDir,
     statusDir: config.updateStatusDir,
   });
-  const admin = await buildAdmin({ config, shares, settings, storage, updates, setupCode: null });
+  const admin = await buildAdmin({ config, shares, settings, storage, updates, providers, notifier, setupCode: null });
   const broker = buildBroker({ shares, settings, storage, vault, secret: null });
   await listen(broker, config.brokerListen);
   const edge = await buildEdge({ config, brokerSecret: null, staticRoot, onlineCacheMs: 0 });
@@ -138,6 +183,10 @@ export async function startStack(files: Record<string, string | Buffer>, env: Re
     admin,
     edge,
     shares,
+    providers,
+    sent,
+    mails,
+    failNotifications,
     adminCall,
     visit,
     call,

@@ -9,12 +9,15 @@ import type {
   LinkDetail,
   LinkState,
   LinkSummary,
+  Provider,
+  RefusalReason,
   UpdateLinkBody,
 } from '../shared/api.ts';
 import { createLinkBody, updateLinkBody } from '../shared/api.ts';
 import { type ContentDeps, folderSnapshot, type Inspection, type Item, inspect, type Snapshot } from './content.ts';
 import { hashSecret, keyProof, passwordVerifier, randomId, safeEqual, sha256, type Vault } from './crypto.ts';
 import { type Db, schema } from './db/index.ts';
+import { allowList, isAllowed } from './network.ts';
 import type { SensitiveList } from './sensitive.ts';
 import { type FolderFile, MAX_LINK_FILES, type Storage, StorageError } from './storage.ts';
 
@@ -77,6 +80,9 @@ export type SharesDeps = {
   sensitive: SensitiveList;
   publicUrl: string;
   maxPasswordFailures: number;
+  providerOf?: (ip: string | null) => Provider | null;
+  /** Told about every event after it is saved; the label is read only if the listener needs it. */
+  onEvent?: (linkId: string, event: NewEvent, labelOf: () => string | null) => void;
 };
 
 export class Shares {
@@ -86,6 +92,8 @@ export class Shares {
   private readonly sensitive: SensitiveList;
   private readonly publicUrl: string;
   private readonly maxPasswordFailures: number;
+  private readonly providerOf: (ip: string | null) => Provider | null;
+  private readonly onEvent: SharesDeps['onEvent'];
   private readonly content: ContentDeps;
   /** Bumped on every change to links, so cached views of them can tell they are stale. */
   revision = 0;
@@ -97,6 +105,8 @@ export class Shares {
     this.sensitive = deps.sensitive;
     this.publicUrl = deps.publicUrl;
     this.maxPasswordFailures = deps.maxPasswordFailures;
+    this.providerOf = deps.providerOf ?? (() => null);
+    this.onEvent = deps.onEvent;
     this.content = { storage: deps.storage, sensitive: deps.sensitive };
   }
 
@@ -120,6 +130,7 @@ export class Shares {
           expiresAt: body.expiresAt,
           maxDownloads: body.maxDownloads,
           onChange: body.onChange ?? defaultPolicy,
+          allowedNetworks: body.allowedNetworks.length ? body.allowedNetworks : null,
         })
         .run();
       tx.insert(linkFiles)
@@ -221,7 +232,8 @@ export class Shares {
       url: this.url(row),
       changes: content.changes.slice(0, MAX_CHANGES),
       version: content.version,
-      events: history.map(({ linkId: _, ...event }) => event as EventView),
+      // Looked up now rather than stored, so older activity gets a provider too once the table is there.
+      events: history.map(({ linkId: _, ...event }): EventView => ({ ...event, provider: this.providerOf(event.ip) })),
     };
   }
 
@@ -236,6 +248,8 @@ export class Shares {
     if (patch.expiresAt !== undefined) changes.expiresAt = patch.expiresAt;
     if (patch.maxDownloads !== undefined) changes.maxDownloads = patch.maxDownloads;
     if (patch.onChange !== undefined) changes.onChange = patch.onChange;
+    if (patch.allowedNetworks !== undefined)
+      changes.allowedNetworks = patch.allowedNetworks.length ? patch.allowedNetworks : null;
     if (patch.password !== undefined) {
       const key = this.vault.open(row.sealedKey, id);
       changes.passwordHash = patch.password ? await hashSecret(await passwordVerifier(patch.password, key, id)) : null;
@@ -335,6 +349,11 @@ export class Shares {
     return !!proof && safeEqual(proof, keyProof(this.vault.open(link.sealedKey, link.id), link.id));
   }
 
+  /** Whether the link may be opened from this address: always, unless it lists the networks it allows. */
+  allowsNetwork(link: LinkRow, ip: string | null | undefined): boolean {
+    return !link.allowedNetworks?.length || isAllowed(allowList(link.allowedNetworks), ip);
+  }
+
   /** Changes whenever the password is set, changed or removed, so older tickets stop working. */
   passwordGeneration(link: LinkRow): string {
     return sha256(link.passwordHash ?? '').slice(0, 12);
@@ -342,14 +361,16 @@ export class Shares {
 
   /**
    * What the broker may serve right now to this visitor, or why not. A link whose limit is reached keeps
-   * serving the people who already got the files: they may retry or fetch the other files.
+   * serving the people who already got the files: they may retry or fetch the other files. The network
+   * comes first, so someone outside the allowed ones learns nothing about the link's state.
    */
   servable(
     id: string,
-    visitor?: string | null,
-  ): { ok: true; value: ServableLink } | { ok: false; reason: LinkState | 'not_found' } {
+    { visitor, ip }: Pick<Visit, 'visitor' | 'ip'>,
+  ): { ok: true; value: ServableLink } | { ok: false; reason: RefusalReason | 'not_found' } {
     const link = this.db.select().from(links).where(eq(links.id, id)).get();
     if (!link) return { ok: false, reason: 'not_found' };
+    if (!this.allowsNetwork(link, ip)) return { ok: false, reason: 'network' };
     const content = this.inspect(link);
     const counts = this.counts(id).get(id) ?? EMPTY_COUNTS;
     const state = this.stateOf(link, content, counts, !!visitor && this.isRecipient(id, visitor));
@@ -377,6 +398,11 @@ export class Shares {
         counted: event.counted ?? false,
       })
       .run();
+    this.onEvent?.(
+      linkId,
+      event,
+      () => this.db.select({ label: links.label }).from(links).where(eq(links.id, linkId)).get()?.label ?? null,
+    );
   }
 
   private startedDownload(linkId: string, downloadId: string) {
@@ -523,6 +549,7 @@ export class Shares {
       maxDownloads: row.maxDownloads,
       hasPassword: row.passwordHash !== null,
       onChange: row.onChange,
+      allowedNetworks: row.allowedNetworks ?? [],
       items: content.items.map(({ item, name, state, changes, size, fileCount }) => ({
         position: item.position,
         kind: item.kind,

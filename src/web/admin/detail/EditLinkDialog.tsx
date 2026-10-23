@@ -7,6 +7,7 @@ import { Dialog } from '../../ui/Dialog.tsx';
 import { Field } from '../../ui/Field.tsx';
 import { Switch } from '../../ui/Switch.tsx';
 import { api, keys } from '../api.ts';
+import { NetworksField, networksProblem, splitNetworks } from '../create/NetworksField.tsx';
 import { PolicyPicker } from '../create/PolicyPicker.tsx';
 
 const toDateInput = (ms: number | null) =>
@@ -21,6 +22,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
   const [removePassword, setRemovePassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [onChange, setOnChange] = useState<ChangePolicy>(link.onChange);
+  const [networks, setNetworks] = useState(link.allowedNetworks.join('\n'));
 
   const save = useMutation({
     mutationFn: () => {
@@ -29,6 +31,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
         expiresAt: expires ? new Date(expires).getTime() : null,
         maxDownloads: maxDownloads ? Number(maxDownloads) : null,
         onChange,
+        allowedNetworks: splitNetworks(networks),
       };
       if (newPassword) patch.password = newPassword;
       else if (removePassword) patch.password = null;
@@ -56,7 +59,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
           <Button
             variant="primary"
             loading={save.isPending}
-            disabled={newPassword.length > 0 && newPassword.length < 4}
+            disabled={(newPassword.length > 0 && newPassword.length < 4) || networksProblem(networks) !== null}
             onClick={() => save.mutate()}
           >
             {t('common.save')}
@@ -95,6 +98,7 @@ export function EditLinkDialog({ link, open, onClose }: { link: LinkDetail; open
           onChange={(event) => setNewPassword(event.target.value)}
         />
         <PolicyPicker value={onChange} onChange={setOnChange} />
+        <NetworksField value={networks} onChange={setNetworks} />
         {link.hasPassword && !newPassword && (
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm">{t('detail.passwordRemove')}</span>

@@ -1,4 +1,4 @@
-import type { LinkState, ShareMeta } from '../../shared/api.ts';
+import type { RefusalReason, ShareMeta } from '../../shared/api.ts';
 import { fromBase64Url, keyProof, openMeta, passwordVerifier, type Sealed } from '../../shared/wire.ts';
 
 export type LinkRef = { id: string; key: Uint8Array<ArrayBuffer> };
@@ -7,7 +7,7 @@ export type Grant = { meta: ShareMeta; ticket: string };
 export type OpenResult =
   | { kind: 'granted'; grant: Grant }
   | { kind: 'password' }
-  | { kind: 'unavailable'; reason?: LinkState }
+  | { kind: 'unavailable'; reason?: RefusalReason }
   | { kind: 'busy' };
 
 export type UnlockResult = OpenResult | { kind: 'wrong' };
@@ -41,7 +41,7 @@ async function post(path: string, body?: unknown) {
 async function toGrant(link: LinkRef, response: Response): Promise<OpenResult> {
   if (response.status === 429) return { kind: 'busy' };
   if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { reason?: LinkState };
+    const data = (await response.json().catch(() => ({}))) as { reason?: RefusalReason };
     return { kind: 'unavailable', reason: data.reason };
   }
   const data = (await response.json()) as { passwordRequired?: boolean; meta?: Sealed; ticket?: string };

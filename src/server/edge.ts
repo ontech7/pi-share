@@ -79,12 +79,23 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
   const secureCookie = config.publicUrl.startsWith('https://');
   let online = { value: false, checkedAt: 0 };
 
-  const visitOf = (request: FastifyRequest): Visit => {
+  const forwardedOf = (request: FastifyRequest) => {
     const forwarded = config.clientIpHeader ? request.headers[config.clientIpHeader] : undefined;
+    return typeof forwarded === 'string' && forwarded ? forwarded.slice(0, 64) : null;
+  };
+  /** Who to count for rate limits and guesses: the visitor, or at least the connection it came on. */
+  const sourceOf = (request: FastifyRequest) =>
+    forwardedOf(request) ?? (request.socket.remoteAddress || 'unknown').slice(0, 64);
+
+  const visitOf = (request: FastifyRequest): Visit => {
     const country = config.countryHeader ? request.headers[config.countryHeader] : undefined;
     const cookie = request.cookies[VISITOR_COOKIE];
     return {
-      ip: ((typeof forwarded === 'string' && forwarded) || request.socket.remoteAddress || 'unknown').slice(0, 64),
+      // With a client header configured, its absence means the proxy's own address, never the visitor's:
+      // that must not pass a link's allowed networks.
+      ip: config.clientIpHeader
+        ? (forwardedOf(request) ?? 'unknown')
+        : (request.socket.remoteAddress || 'unknown').slice(0, 64),
       country: typeof country === 'string' ? country.slice(0, 8) : null,
       userAgent: request.headers['user-agent']?.slice(0, 512) ?? null,
       language: request.headers['accept-language']?.slice(0, 128) ?? null,
@@ -129,10 +140,10 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
     return online.value;
   };
 
-  const relayJson = async (reply: FastifyReply, response: Dispatcher.ResponseData, visit: Visit) => {
+  const relayJson = async (reply: FastifyReply, response: Dispatcher.ResponseData, request: FastifyRequest) => {
     const text = await response.body.text();
     // A 404 that carries a reason went to someone holding the key or a ticket: not a guess at link ids.
-    if (response.statusCode === 404 && !hasReason(text)) prober.miss(visit.ip);
+    if (response.statusCode === 404 && !hasReason(text)) prober.miss(sourceOf(request));
     return reply
       .code(response.statusCode)
       .type('application/json')
@@ -163,14 +174,14 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
   await app.register(fastifyRateLimit, {
     max: 120,
     timeWindow: '1 minute',
-    keyGenerator: (request) => visitOf(request).ip,
+    keyGenerator: sourceOf,
   });
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
     if (!request.url.startsWith('/assets/')) reply.header('cache-control', 'no-store');
     const visit = visitOf(request);
-    if (prober.isBlocked(visit.ip) || !(await isOnline())) return reply.code(404).send();
+    if (prober.isBlocked(sourceOf(request)) || !(await isOnline())) return reply.code(404).send();
     // The API is only for pages served by /d/:id, which always set the visitor cookie tickets are bound to.
     if (request.routeOptions.url?.startsWith('/api/') && !visit.visitor)
       return reply.code(403).send({ error: 'cookies' });
@@ -213,7 +224,11 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
     const { id } = request.params as { id: string };
     const visit = visitOf(request);
     if (!linkId.safeParse(id).success) return reply.code(404).send();
-    return relayJson(reply, await callBroker('POST', `/links/${id}/open`, visit, { body: request.body ?? {} }), visit);
+    return relayJson(
+      reply,
+      await callBroker('POST', `/links/${id}/open`, visit, { body: request.body ?? {} }),
+      request,
+    );
   });
 
   app.post(
@@ -223,7 +238,7 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
       const { id } = request.params as { id: string };
       const visit = visitOf(request);
       if (!linkId.safeParse(id).success) return reply.code(404).send();
-      return relayJson(reply, await callBroker('POST', `/links/${id}/unlock`, visit, { body: request.body }), visit);
+      return relayJson(reply, await callBroker('POST', `/links/${id}/unlock`, visit, { body: request.body }), request);
     },
   );
 
@@ -239,7 +254,7 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
       ticket: request.headers[TICKET_HEADER] as string | undefined,
       signal: abort.signal,
     });
-    if (response.statusCode !== 200) return relayJson(reply, response, visit);
+    if (response.statusCode !== 200) return relayJson(reply, response, request);
     return reply
       .header('content-type', 'application/octet-stream')
       .header('content-length', response.headers['content-length'])
@@ -255,7 +270,7 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
       body: request.body,
       ticket: request.headers[TICKET_HEADER] as string | undefined,
     });
-    return relayJson(reply, response, visit);
+    return relayJson(reply, response, request);
   });
 
   app.setNotFoundHandler((_request, reply) => reply.code(404).send());

@@ -60,12 +60,20 @@ when**.
   The recipient's browser decrypts and verifies every byte; tunnels and CDNs see ciphertext only.
 - **Password, expiry and a limit on how many people may download**, with a lock after repeated wrong passwords.
   Whoever already downloaded may always come back; a cancelled download never counts.
+- **Allowed networks.** A link can be limited to a list of addresses or ranges, such as a company VPN: from
+  anywhere else it does not open, not even with the password, so a link that ends up in the wrong chat stays shut.
 - **One isolated service on the internet.** The public process has no disk, no database and no network: it only
   talks to the broker over a unix socket. The admin stays on your LAN or VPN.
 
 **Stay in control**
 - **Know what happened.** Opens, wrong passwords, downloads started, completed, interrupted and verified in the
-  browser, each with time, IP, country, browser, OS and language. Chat-app link previews are logged apart.
+  browser, each with time, IP, country, provider, browser, OS and language. Servers, clouds and VPN exits are
+  marked as such. The provider comes from a public table kept on your disk: no address is looked up online.
+- **Know where a link went.** When a chat app (Discord, Slack, Telegram, WhatsApp, iMessage...) previews a link,
+  the link says so: that chat holds the whole link, key included.
+- **Notifications** through ntfy, a Telegram bot of yours or email (any SMTP server), for opens, downloads,
+  wrong passwords, refused attempts and chat previews. They name the link, the country and the provider; never
+  the link itself, its key or the visitor's address.
 - **Disable, re-enable or delete** a link at any time; moved or deleted files are detected.
 - **Off when not in use.** One switch takes the public page offline, and it can switch itself off when no link
   is active.
@@ -218,6 +226,15 @@ ticket valid, is the file still the same) is taken again by the broker on each r
   purpose never yields the end of a file. Whoever already counts may retry and fetch the other files; someone new
   finds the link exhausted, and so does someone who drops the visitor cookie, which lasts a year. People
   downloading for the first time hold their place until they finish.
+- Allowed networks trust the client address the tunnel puts in `CLIENT_IP_HEADER`. Cloudflare sets
+  `cf-connecting-ip` itself, so a visitor cannot choose it; behind a proxy that passes the header through from the
+  client, the list would be as easy to fake as the header. When the header is configured but missing, the visit
+  has no address (not the proxy's) and never passes a list; set `CLIENT_IP_HEADER` empty only when nothing sits in
+  front of the edge.
+- The provider table takes a few tens of MB in the admin process; on a board with 1 GB or less, consider
+  `PROVIDER_LOOKUP=false`. A downloaded table is capped in size, rows and line length before it is used.
+- Notifications, the provider table and update checks are the only things the admin sends out, and only to the
+  servers you configure (or iptoasn.com and GitHub). The edge stays without network.
 - A file counts as unchanged while its size and modification time are the same. Someone who can write to the disk
   and restore both after editing could serve new content without the link noticing; that person already owns the
   files.
@@ -268,9 +285,11 @@ Every push runs these checks, and they must pass before anything is merged:
 | `MAX_PASSWORD_FAILURES`                            | `10`                                | Wrong passwords before a link locks                                                      |
 | `EVENT_RETENTION_DAYS`                             | `365`                               | Older activity is deleted                                                                |
 | `ADMIN_LANG`                                       |                                     | `en` or `it`; empty follows the browser                                                  |
+| `PROVIDER_LOOKUP`                                  | `true`                              | Default of **Settings → Activity → Show the provider** until you change it there         |
+| `PROVIDER_DATA_URL`                                | iptoasn.com's combined table        | Where the weekly provider table (gzipped iptoasn TSV, public domain) is downloaded from  |
 
 Everything else (what a change on disk does, expiry, download limit, generated password for new links, the
-service switch) lives in the admin's **Settings**.
+service switch, the provider lookup, notification channels) lives in the admin's **Settings**.
 
 ## Troubleshooting
 

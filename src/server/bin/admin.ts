@@ -5,6 +5,8 @@ import { loadConfig } from '../config.ts';
 import { loadOrCreateKey, Vault } from '../crypto.ts';
 import { openDatabase } from '../db/index.ts';
 import { closeOnSignal, listen, readSecret } from '../listen.ts';
+import { Notifier } from '../notify.ts';
+import { Providers } from '../providers.ts';
 import { SensitiveList } from '../sensitive.ts';
 import { Settings } from '../settings.ts';
 import { Shares } from '../shares.ts';
@@ -16,6 +18,20 @@ const db = openDatabase(config.dbFile);
 const vault = new Vault(loadOrCreateKey(config.masterKeyFile));
 const storage = new Storage(config.storageRoot, config.deny, config.hideSystem);
 const settings = new Settings(db);
+const version = currentVersion();
+const providers = new Providers({
+  file: config.providerFile,
+  url: config.providerDataUrl,
+  settings,
+  enabledDefault: config.providerLookup,
+  userAgent: `pi-share/${version}`,
+});
+const notifier = new Notifier({
+  settings,
+  vault,
+  providerOf: (ip) => providers.lookup(ip),
+  lang: config.lang || 'en',
+});
 const shares = new Shares({
   db,
   storage,
@@ -23,9 +39,10 @@ const shares = new Shares({
   sensitive: new SensitiveList(config.sensitiveFile),
   publicUrl: config.publicUrl,
   maxPasswordFailures: config.maxPasswordFailures,
+  providerOf: (ip) => providers.lookup(ip),
+  onEvent: (linkId, event, labelOf) => notifier.onEvent(linkId, event, labelOf),
 });
 
-const version = currentVersion();
 const updates = new Updates({
   current: version,
   fetchLatest: githubLatest(config.updateRepo, `pi-share/${version}`),
@@ -36,6 +53,8 @@ const updates = new Updates({
 });
 setTimeout(() => updates.maybeCheck(), 10_000).unref();
 setInterval(() => updates.maybeCheck(), 60 * 60 * 1000).unref();
+setTimeout(() => void providers.start(), 15_000).unref();
+setInterval(() => void providers.maybeRefresh(), 6 * 60 * 60 * 1000).unref();
 
 const setupCode = settings.hasAdminPassword() ? null : generateSetupCode();
 if (setupCode) console.log(`pi-share: no admin password yet, open the admin and use the setup code ${setupCode}`);
@@ -46,6 +65,8 @@ const admin = await buildAdmin({
   settings,
   storage,
   updates,
+  providers,
+  notifier,
   setupCode,
   staticRoot: path.resolve(import.meta.dirname, '../../../dist/admin'),
 });

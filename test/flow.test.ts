@@ -12,6 +12,8 @@ import { loadOrCreateKey, Vault } from '../src/server/crypto.ts';
 import { openDatabase } from '../src/server/db/index.ts';
 import { buildEdge } from '../src/server/edge.ts';
 import { listen } from '../src/server/listen.ts';
+import { Notifier } from '../src/server/notify.ts';
+import { Providers } from '../src/server/providers.ts';
 import { SensitiveList } from '../src/server/sensitive.ts';
 import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
@@ -132,7 +134,15 @@ beforeAll(async () => {
     requestDir: '',
     statusDir: '',
   });
-  admin = await buildAdmin({ config, shares, settings, storage, updates, setupCode: SETUP_CODE });
+  const providers = new Providers({
+    file: config.providerFile,
+    url: config.providerDataUrl,
+    settings,
+    enabledDefault: false,
+    userAgent: 'pi-share/test',
+  });
+  const notifier = new Notifier({ settings, vault, providerOf: () => null, lang: 'en' });
+  admin = await buildAdmin({ config, shares, settings, storage, updates, providers, notifier, setupCode: SETUP_CODE });
   broker = buildBroker({ shares, settings, storage, vault, secret: null });
   await listen(broker, config.brokerListen);
   edge = await buildEdge({ config, brokerSecret: null, staticRoot, onlineCacheMs: 0 });

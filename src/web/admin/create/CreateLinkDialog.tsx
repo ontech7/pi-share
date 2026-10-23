@@ -12,6 +12,7 @@ import { Dialog } from '../../ui/Dialog.tsx';
 import { Field } from '../../ui/Field.tsx';
 import { ApiError, api, keys } from '../api.ts';
 import { FilePicker } from './FilePicker.tsx';
+import { NetworksField, networksProblem, splitNetworks } from './NetworksField.tsx';
 import { PolicyPicker } from './PolicyPicker.tsx';
 import { generatePassword } from './password.ts';
 
@@ -37,6 +38,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
   const [maxDownloads, setMaxDownloads] = useState('');
   const [sensitive, setSensitive] = useState<string[] | null>(null);
   const [onChange, setOnChange] = useState<ChangePolicy>('pause');
+  const [networks, setNetworks] = useState('');
   const [created, setCreated] = useState<LinkDetail | null>(null);
   const preferences = useQuery({ queryKey: keys.preferences, queryFn: api.preferences, enabled: open });
 
@@ -57,6 +59,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
     setStep('files');
     setSelected(new Map());
     setLabel('');
+    setNetworks('');
     setSensitive(null);
     setCreated(null);
   };
@@ -75,6 +78,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
         expiresAt: expiryDays ? Date.now() + expiryDays * 86_400_000 : null,
         maxDownloads: maxDownloads ? Number(maxDownloads) : null,
         onChange,
+        allowedNetworks: splitNetworks(networks),
         confirmSensitive,
       }),
     onSuccess: (link) => {
@@ -130,7 +134,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
         <Button
           variant="primary"
           loading={create.isPending}
-          disabled={password.length > 0 && password.length < 4}
+          disabled={(password.length > 0 && password.length < 4) || networksProblem(networks) !== null}
           icon={<Link2 className="size-4" />}
           onClick={() => create.mutate(false)}
         >
@@ -247,6 +251,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
             onChange={(event) => setMaxDownloads(event.target.value.replace(/\D/g, ''))}
           />
           <PolicyPicker value={onChange} onChange={setOnChange} />
+          <NetworksField value={networks} onChange={setNetworks} />
           {create.isError && !sensitive && (
             <p className="text-sm text-danger" role="alert">
               {t('common.error')}

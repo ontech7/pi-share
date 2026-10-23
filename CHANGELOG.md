@@ -3,6 +3,19 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Allowed networks per link: addresses or ranges (IPv4 and IPv6) a link may be opened from. Anyone else holding
+  the link is told it is not available from their network, before any password is tried; downloads stop if the
+  visitor moves to another network.
+- The provider behind each visit (home ISP, mobile operator, cloud), from a public table the admin downloads
+  weekly and looks up on disk. Clouds, servers and VPN exits are marked.
+- Notifications through ntfy, a Telegram bot or email (SMTP) for opens, downloads, wrong passwords, refused
+  attempts and chat previews, with secrets encrypted at rest.
+- A link previewed by a chat app says which one, and that the chat now holds the whole link.
+
 ## [0.4.2] - 2026-10-23
 
 ### Changed

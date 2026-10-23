@@ -117,6 +117,7 @@ export function LinkScreen({ id }: { id: string }) {
               <span>
                 {t('detail.expires')} {data.expiresAt ? formatDate(data.expiresAt, lang) : t('common.never')}
               </span>
+              {data.createdBy && <span>{t('detail.createdBy', { name: data.createdBy })}</span>}
               {data.maxDownloads && (
                 <span className="flex items-center gap-1 tabular">
                   <Users className="size-3.5" />

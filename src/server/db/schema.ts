@@ -15,6 +15,9 @@ export const links = sqliteTable('links', {
   onChange: text('on_change', { enum: changePolicies }).notNull().default('pause'),
   /** JSON list of CIDRs the link may be opened from; null for any network. */
   allowedNetworks: text('allowed_networks', { mode: 'json' }).$type<string[]>(),
+  /** The integration token that created the link, and its name then: tokens see only their own links. */
+  tokenId: text('token_id'),
+  createdBy: text('created_by'),
 });
 
 export const linkFiles = sqliteTable(
@@ -77,6 +80,17 @@ export const sessions = sqliteTable('sessions', {
   tokenHash: text('token_hash').primaryKey(),
   createdAt: integer('created_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
+});
+
+export const tokens = sqliteTable('tokens', {
+  id: text().primaryKey(),
+  name: text().notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  /** The last characters of the token, so the owner can tell which one a program holds. */
+  hint: text().notNull(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at'),
+  lastUsedAt: integer('last_used_at'),
 });
 
 export const settings = sqliteTable('settings', {

@@ -15,6 +15,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Notifications through ntfy, a Telegram bot or email (SMTP) for opens, downloads, wrong passwords, refused
   attempts and chat previews, with secrets encrypted at rest.
 - A link previewed by a chat app says which one, and that the chat now holds the whole link.
+- Integration tokens (**Settings → Integrations**): named, with an expiry or none, shown once and stored as a hash,
+  revocable. A token can create links and see or delete the ones it created, nothing else; its links show which
+  token made them.
+
+### Changed
+
+- A new link takes the expiry and download limit of **Settings → New links** when the request leaves them out,
+  not only when it comes from the admin's dialog. `null` still means never and no limit.
 
 ## [0.4.2] - 2026-10-23
 

@@ -75,6 +75,8 @@ when**.
   wrong passwords, refused attempts and chat previews. They name the link, the country and the provider; never
   the link itself, its key or the visitor's address.
 - **Disable, re-enable or delete** a link at any time; moved or deleted files are detected.
+- **Tokens for your own programs.** A script or an assistant can create links through the API with a token you
+  name, give an expiry and revoke at any time. It sees only the links it created.
 - **Off when not in use.** One switch takes the public page offline, and it can switch itself off when no link
   is active.
 - English and Italian, light and dark themes, made for phones too.
@@ -211,6 +213,7 @@ ticket valid, is the file still the same) is taken again by the broker on each r
 | The tunnel / CDN provider                           | Ciphertext, link ids, timing and approximate sizes. Never names, keys or passwords.                 |
 | Someone who has the link (and the password, if set) | The linked files, until you disable the link, it expires or reaches its limit.                      |
 | A compromised edge process                          | The broker's narrow API: no listing of links, no files outside a link, no keys.                     |
+| A program holding an integration token              | New links to any file the admin can share; only the links it created. No settings, no other tokens. |
 | Someone on your LAN                                 | The login page, rate-limited, unless you restrict the admin further (`ADMIN_ALLOW`, `ADMIN_HOSTS`). |
 | Someone with root on the host                       | Everything. pi-share protects data in transit and at the edge, not from the machine's owner.        |
 
@@ -263,6 +266,28 @@ Every push runs these checks, and they must pass before anything is merged:
 | **End to end in a real browser** | headless Chrome sets up the admin, creates a link, unlocks it, downloads through the service worker and compares the SHA-256 of the saved file with the original, shares a live folder, saves the settings                                                     |
 | **CodeQL**                       | GitHub's security-extended queries, weekly and on every push                                                                                                                                                                                                   |
 | **Multi-arch image**             | `linux/amd64` and `linux/arm64`, published with build provenance on every release                                                                                                                                                                              |
+
+## API for your programs
+
+Create a token in **Settings → Integrations**: give it a name, an expiry (or none, with a warning) and copy it,
+since it is shown once. pi-share keeps only its hash. Send it as a bearer token from a network in `ADMIN_ALLOW`:
+
+```sh
+curl -H "Authorization: Bearer pis_…" -H "Content-Type: application/json" \
+  -d '{"paths": ["Work/photo.jpg"], "password": "1234"}' http://localhost:8080/api/links
+```
+
+| Request                 | What it does                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| `POST /api/links`       | Creates a link (same body as the admin's); the answer carries its `url`, key included |
+| `GET /api/links`        | The links this token created                                                          |
+| `GET /api/links/:id`    | One of them, with its `url` and activity                                              |
+| `DELETE /api/links/:id` | Deletes one of them                                                                   |
+
+Settings left out of a new link come from **Settings → New links**. Any other request answers `403 token_scope`;
+an unknown, expired or revoked token gets `401 invalid_token`. A file on the sensitive list is refused with
+`409 sensitive` unless the request sets `confirmSensitive`. The answer of a create holds the link's key: keep it
+out of logs, and out of anything you would not hand the link to.
 
 ## Configuration
 

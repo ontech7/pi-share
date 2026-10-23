@@ -63,8 +63,10 @@ export const createLinkBody = z.object({
   paths: z.array(z.string().min(1).max(4096)).min(1).max(100),
   label: z.string().trim().max(120).default(''),
   password: z.string().min(4).max(256).optional(),
-  expiresAt: z.number().int().positive().nullable().default(null),
-  maxDownloads: z.number().int().min(1).max(10_000).nullable().default(null),
+  /** Left out, it comes from the saved defaults for new links; null never expires. */
+  expiresAt: z.number().int().positive().nullable().optional(),
+  /** Left out, it comes from the saved defaults for new links; null means no limit. */
+  maxDownloads: z.number().int().min(1).max(10_000).nullable().optional(),
   onChange: z.enum(changePolicies).optional(),
   /** Networks the link may be opened from; empty means any. */
   allowedNetworks: networks.default([]),
@@ -139,6 +141,31 @@ export const changePasswordBody = z.object({
   password: z.string().min(10).max(256),
 });
 
+export const TOKEN_PREFIX = 'pis_';
+export const MAX_TOKENS = 20;
+export const createTokenBody = z.object({
+  name: z.string().trim().min(1).max(60),
+  /** Null never expires. */
+  expiresAt: z
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .refine((value) => value === null || value > Date.now(), 'in_the_past'),
+});
+export type CreateTokenBody = z.input<typeof createTokenBody>;
+
+export type TokenView = {
+  id: string;
+  name: string;
+  hint: string;
+  createdAt: number;
+  expiresAt: number | null;
+  lastUsedAt: number | null;
+};
+/** The token itself travels only in this answer, once. */
+export type CreatedToken = TokenView & { token: string };
+
 export type SessionState = { authenticated: boolean; needsSetup: boolean; lang: string };
 
 export type ServiceState = {
@@ -188,6 +215,8 @@ export type LinkSummary = {
   hasPassword: boolean;
   onChange: ChangePolicy;
   allowedNetworks: string[];
+  /** The integration token that created the link, by the name it had then. */
+  createdBy: string | null;
   items: LinkItemView[];
   counts: LinkCounts;
   lastActivityAt: number | null;

@@ -29,6 +29,13 @@
       "when": 1792759275733,
       "tag": "0003_networks",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792763032548,
+      "tag": "0004_tokens",
+      "breakpoints": true
     }
   ]
 }

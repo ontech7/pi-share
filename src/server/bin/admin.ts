@@ -11,6 +11,7 @@ import { SensitiveList } from '../sensitive.ts';
 import { Settings } from '../settings.ts';
 import { Shares } from '../shares.ts';
 import { Storage } from '../storage.ts';
+import { Tokens } from '../tokens.ts';
 import { currentVersion, githubLatest, Updates } from '../updates.ts';
 
 const config = loadConfig();
@@ -63,6 +64,7 @@ const admin = await buildAdmin({
   config,
   shares,
   settings,
+  tokens: new Tokens(db),
   storage,
   updates,
   providers,

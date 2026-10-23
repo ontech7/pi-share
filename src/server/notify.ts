@@ -298,10 +298,8 @@ export class Notifier {
       else await this.email(stored.email, plain, message);
       this.status[channel] = { lastSentAt: this.now, lastError: null };
     } catch (error) {
-      const { code, detail } = remoteError(error);
       // Whatever the server says, the secret never ends up in what the admin is shown.
-      const redacted = detail === null ? null : detail.split(plain || '\0').join('***');
-      this.status[channel] = { ...this.status[channel], lastError: { code, detail: redacted } };
+      this.status[channel] = { ...this.status[channel], lastError: remoteError(error, plain) };
       throw error;
     }
   }

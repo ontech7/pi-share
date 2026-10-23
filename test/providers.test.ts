@@ -49,9 +49,12 @@ describe('provider table', () => {
 
   it('refuses a table built to exhaust memory or CPU', async () => {
     const rows = zlib.gzipSync('1::\t1::\t1\n'.repeat(2_000_001));
-    await expect(parseTable(Readable.from([rows]))).rejects.toThrow(/too many ranges/);
+    await expect(parseTable(Readable.from([rows]))).rejects.toMatchObject({
+      code: 'invalid',
+      detail: 'too many ranges',
+    });
     const line = zlib.gzipSync('x'.repeat(100_000));
-    await expect(parseTable(Readable.from([line]))).rejects.toThrow(/line too long/);
+    await expect(parseTable(Readable.from([line]))).rejects.toMatchObject({ code: 'invalid', detail: 'line too long' });
   });
 
   it('rejects data that is not gzip', async () => {

@@ -117,6 +117,12 @@ describe('notification settings', () => {
     stack.failNotifications(200, '{}', Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNECTION' }));
     const unreachable = await stack.adminCall('POST', '/api/notifications/test', { channel: 'email' });
     expect(unreachable.body.detail).toEqual({ code: 'unreachable', detail: null });
+    // A secret the 200-character cut would split in two is still blanked out whole.
+    stack.failNotifications(401, JSON.stringify({ ok: false, description: `${'x'.repeat(190)} ${BOT_TOKEN}` }));
+    const cut = await stack.adminCall('POST', '/api/notifications/test', { channel: 'telegram' });
+    expect(cut.body.detail.detail).not.toContain(BOT_TOKEN.slice(0, 8));
+    stack.failNotifications(401, JSON.stringify({ ok: false, description: `Unauthorized ${BOT_TOKEN}` }));
+    await stack.adminCall('POST', '/api/notifications/test', { channel: 'telegram' });
     const view = (await stack.adminCall('GET', '/api/notifications')).body as NotificationSettings;
     expect(view.status.telegram.lastError).toEqual({ code: 'rejected', detail: 'Unauthorized ***' });
     expect(JSON.stringify(view)).not.toContain('smtp-secret');

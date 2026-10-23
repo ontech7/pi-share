@@ -1,6 +1,8 @@
 import type {
   BrowseResult,
+  CreatedToken,
   CreateLinkBody,
+  CreateTokenBody,
   LinkDetail,
   LinkSummary,
   NotificationChannel,
@@ -10,6 +12,7 @@ import type {
   ProviderInfo,
   ServiceState,
   SessionState,
+  TokenView,
   UpdateInfo,
   UpdateLinkBody,
 } from '../../shared/api.ts';
@@ -66,6 +69,9 @@ export const api = {
     request<NotificationSettings>('PATCH', '/api/notifications', patch),
   testNotification: (channel: NotificationChannel) =>
     request<NotificationSettings>('POST', '/api/notifications/test', { channel }),
+  tokens: () => request<TokenView[]>('GET', '/api/tokens'),
+  createToken: (body: CreateTokenBody) => request<CreatedToken>('POST', '/api/tokens', body),
+  deleteToken: (id: string) => request<void>('DELETE', `/api/tokens/${id}`),
   browse: (path: string) => request<BrowseResult>('GET', `/api/browse?path=${encodeURIComponent(path)}`),
   links: () => request<LinkSummary[]>('GET', '/api/links'),
   link: (id: string) => request<LinkDetail>('GET', `/api/links/${id}`),
@@ -81,6 +87,7 @@ export const keys = {
   updates: ['updates'] as const,
   providers: ['providers'] as const,
   notifications: ['notifications'] as const,
+  tokens: ['tokens'] as const,
   links: ['links'] as const,
   link: (id: string) => ['links', id] as const,
   browse: (path: string) => ['browse', path] as const,

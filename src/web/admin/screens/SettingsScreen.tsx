@@ -5,6 +5,7 @@ import {
   BellRing,
   ChevronRight,
   Globe,
+  KeyRound,
   Link2,
   type LucideIcon,
   Radio,
@@ -17,6 +18,7 @@ import { useI18n } from '../../lib/i18n-context.tsx';
 import { Card } from '../../ui/Card.tsx';
 import { AccountSection } from '../settings/AccountSection.tsx';
 import { ActivitySection } from '../settings/ActivitySection.tsx';
+import { IntegrationsSection } from '../settings/IntegrationsSection.tsx';
 import { NewLinksSection } from '../settings/NewLinksSection.tsx';
 import { NotificationsSection } from '../settings/NotificationsSection.tsx';
 import { ServiceSection } from '../settings/ServiceSection.tsx';
@@ -56,6 +58,14 @@ const SECTIONS: Section[] = [
     hint: 'settings.notificationsHint',
     intro: 'settings.notificationsIntro',
     body: NotificationsSection,
+  },
+  {
+    id: 'integrations',
+    icon: KeyRound,
+    title: 'settings.integrations',
+    hint: 'settings.integrationsHint',
+    intro: 'settings.integrationsIntro',
+    body: IntegrationsSection,
   },
   {
     id: 'updates',

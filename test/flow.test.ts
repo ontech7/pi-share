@@ -18,6 +18,7 @@ import { SensitiveList } from '../src/server/sensitive.ts';
 import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
 import { Storage } from '../src/server/storage.ts';
+import { Tokens } from '../src/server/tokens.ts';
 import { Updates } from '../src/server/updates.ts';
 import type { LinkDetail, ShareMeta } from '../src/shared/api.ts';
 import { decryptStream, fromBase64Url, keyProof, openMeta, passwordVerifier, type Sealed } from '../src/shared/wire.ts';
@@ -142,7 +143,17 @@ beforeAll(async () => {
     userAgent: 'pi-share/test',
   });
   const notifier = new Notifier({ settings, vault, providerOf: () => null, lang: 'en' });
-  admin = await buildAdmin({ config, shares, settings, storage, updates, providers, notifier, setupCode: SETUP_CODE });
+  admin = await buildAdmin({
+    config,
+    shares,
+    settings,
+    tokens: new Tokens(db),
+    storage,
+    updates,
+    providers,
+    notifier,
+    setupCode: SETUP_CODE,
+  });
   broker = buildBroker({ shares, settings, storage, vault, secret: null });
   await listen(broker, config.brokerListen);
   edge = await buildEdge({ config, brokerSecret: null, staticRoot, onlineCacheMs: 0 });

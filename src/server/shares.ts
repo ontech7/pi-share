@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
 import type {
-  ChangePolicy,
   CreateLinkBody,
   EventType,
   EventView,
@@ -9,6 +8,7 @@ import type {
   LinkDetail,
   LinkState,
   LinkSummary,
+  Preferences,
   Provider,
   RefusalReason,
   UpdateLinkBody,
@@ -20,6 +20,7 @@ import { type Db, schema } from './db/index.ts';
 import { allowList, isAllowed } from './network.ts';
 import type { SensitiveList } from './sensitive.ts';
 import { type FolderFile, MAX_LINK_FILES, type Storage, StorageError } from './storage.ts';
+import type { TokenOwner } from './tokens.ts';
 
 const { links, linkFiles, folderSnapshots, events } = schema;
 
@@ -60,6 +61,9 @@ export type NewEvent = Visit & {
   detail?: string | null;
   counted?: boolean;
 };
+
+/** What a new link gets for the settings its request leaves out. */
+export type LinkDefaults = Pick<Preferences, 'onChange' | 'expiryDays' | 'maxDownloads'>;
 
 export type ServableLink = { link: LinkRow; content: Inspection; counts: LinkCounts; key: Buffer };
 
@@ -110,14 +114,18 @@ export class Shares {
     this.content = { storage: deps.storage, sensitive: deps.sensitive };
   }
 
-  async create(input: CreateLinkBody, defaultPolicy: ChangePolicy = 'pause'): Promise<LinkDetail> {
+  async create(input: CreateLinkBody, defaults: LinkDefaults, owner?: TokenOwner): Promise<LinkDetail> {
     const body = createLinkBody.parse(input);
-    const { items, flagged } = this.resolveItems(body.paths, body.confirmSensitive);
-    if (flagged.length && !body.confirmSensitive) throw new ShareError(409, 'sensitive', { files: flagged });
+    // Only a person in the admin may confirm a file on the sensitive list, never a program holding a token.
+    const confirmed = body.confirmSensitive && !owner;
+    const { items, flagged } = this.resolveItems(body.paths, confirmed);
+    if (flagged.length && !confirmed) throw new ShareError(409, 'sensitive', { files: flagged });
 
     const id = randomId(16);
     const key = crypto.randomBytes(32);
     const passwordHash = body.password ? await hashSecret(await passwordVerifier(body.password, key, id)) : null;
+    const now = Date.now();
+    const defaultExpiry = defaults.expiryDays ? now + defaults.expiryDays * 86_400_000 : null;
 
     this.db.transaction((tx) => {
       tx.insert(links)
@@ -126,11 +134,13 @@ export class Shares {
           label: body.label,
           sealedKey: this.vault.seal(key, id),
           passwordHash,
-          createdAt: Date.now(),
-          expiresAt: body.expiresAt,
-          maxDownloads: body.maxDownloads,
-          onChange: body.onChange ?? defaultPolicy,
+          createdAt: now,
+          expiresAt: body.expiresAt === undefined ? defaultExpiry : body.expiresAt,
+          maxDownloads: body.maxDownloads === undefined ? defaults.maxDownloads : body.maxDownloads,
+          onChange: body.onChange ?? defaults.onChange,
           allowedNetworks: body.allowedNetworks.length ? body.allowedNetworks : null,
+          tokenId: owner?.id ?? null,
+          createdBy: owner?.name ?? null,
         })
         .run();
       tx.insert(linkFiles)
@@ -210,14 +220,20 @@ export class Shares {
     }
   }
 
-  list(): LinkSummary[] {
-    const rows = this.db.select().from(links).orderBy(desc(links.createdAt)).all();
+  /** Every link, or with `owner` only those that token created. */
+  list(owner?: string): LinkSummary[] {
+    const rows = this.db
+      .select()
+      .from(links)
+      .where(owner === undefined ? undefined : eq(links.tokenId, owner))
+      .orderBy(desc(links.createdAt))
+      .all();
     const counts = this.counts();
     return rows.map((row) => this.summarize(row, this.inspect(row), counts.get(row.id)));
   }
 
-  detail(id: string): LinkDetail {
-    const row = this.row(id);
+  detail(id: string, owner?: string): LinkDetail {
+    const row = this.row(id, owner);
     const content = this.inspect(row);
     const summary = this.summarize(row, content, this.counts(id).get(id));
     const history = this.db
@@ -312,8 +328,8 @@ export class Shares {
     };
   }
 
-  remove(id: string) {
-    this.row(id);
+  remove(id: string, owner?: string) {
+    this.row(id, owner);
     this.db.delete(links).where(eq(links.id, id)).run();
     this.revision++;
   }
@@ -469,9 +485,10 @@ export class Shares {
     if (link.failedPasswords > 0) this.db.update(links).set({ failedPasswords: 0 }).where(eq(links.id, link.id)).run();
   }
 
-  private row(id: string): LinkRow {
+  /** A token asking for a link it did not create gets the same answer as for one that does not exist. */
+  private row(id: string, owner?: string): LinkRow {
     const row = this.db.select().from(links).where(eq(links.id, id)).get();
-    if (!row) throw new ShareError(404, 'not_found');
+    if (!row || (owner !== undefined && row.tokenId !== owner)) throw new ShareError(404, 'not_found');
     return row;
   }
 
@@ -550,6 +567,7 @@ export class Shares {
       hasPassword: row.passwordHash !== null,
       onChange: row.onChange,
       allowedNetworks: row.allowedNetworks ?? [],
+      createdBy: row.createdBy,
       items: content.items.map(({ item, name, state, changes, size, fileCount }) => ({
         position: item.position,
         kind: item.kind,

@@ -13,6 +13,7 @@ import { SensitiveList } from '../src/server/sensitive.ts';
 import { Settings } from '../src/server/settings.ts';
 import { Shares } from '../src/server/shares.ts';
 import { Storage } from '../src/server/storage.ts';
+import { Tokens } from '../src/server/tokens.ts';
 import { Updates } from '../src/server/updates.ts';
 import type { LinkDetail, ReleaseInfo } from '../src/shared/api.ts';
 import { fromBase64Url, keyProof, passwordVerifier } from '../src/shared/wire.ts';
@@ -106,7 +107,18 @@ export async function startStack(
     requestDir: config.updateRequestDir,
     statusDir: config.updateStatusDir,
   });
-  const admin = await buildAdmin({ config, shares, settings, storage, updates, providers, notifier, setupCode: null });
+  const tokens = new Tokens(db);
+  const admin = await buildAdmin({
+    config,
+    shares,
+    settings,
+    tokens,
+    storage,
+    updates,
+    providers,
+    notifier,
+    setupCode: null,
+  });
   const broker = buildBroker({ shares, settings, storage, vault, secret: null });
   await listen(broker, config.brokerListen);
   const edge = await buildEdge({ config, brokerSecret: null, staticRoot, onlineCacheMs: 0 });

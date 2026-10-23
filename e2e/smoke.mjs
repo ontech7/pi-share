@@ -383,6 +383,34 @@ try {
   await panel.shot('16-notifications');
   await panel.shot('16-notifications-mobile', { width: 390, height: 1600, mobile: true });
 
+  await panel.click('Integrations');
+  await panel.text('New token');
+  await panel.fill('input[placeholder="pi-agent"]', 0, 'pi-agent');
+  await panel.click('Never');
+  await panel.text('never expires works until you revoke it');
+  await panel.shot('17-token-new');
+  await panel.click('1 year');
+  await panel.click('Create token');
+  await panel.text('Copy it now');
+  await panel.shot('17-token-created-mobile', { width: 390, height: 844, mobile: true });
+  const token = await panel.eval(`document.querySelector('code.select-all').textContent`);
+  assert(/^pis_[\w-]{43}$/.test(token), 'a new token is shown once');
+  const byToken = await fetch(`${ADMIN}/api/links`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ paths: ['Work/notes.txt'], password: '1234', label: 'From pi-agent' }),
+  });
+  assert(byToken.status === 201, `a token creates a link (${byToken.status})`);
+  const tokenLink = await byToken.json();
+  assert(tokenLink.createdBy === 'pi-agent' && tokenLink.expiresAt, 'token link has its creator and default expiry');
+  await panel.go(`${ADMIN}/settings/integrations`);
+  await panel.text('Used');
+  await panel.shot('18-tokens');
+  await panel.shot('18-tokens-mobile', { width: 390, height: 844, mobile: true });
+  await panel.go(`${ADMIN}/links/${tokenLink.id}`);
+  await panel.text('By pi-agent');
+  await panel.go(`${ADMIN}/settings`);
+
   await panel.click('Updates');
   await panel.text('Installed version');
   const updates = await panel.eval(`fetch('/api/updates').then((r) => r.json())`);

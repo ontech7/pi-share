@@ -196,6 +196,7 @@ export async function startStack(
     edge,
     shares,
     providers,
+    settings,
     sent,
     mails,
     failNotifications,

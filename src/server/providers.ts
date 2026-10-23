@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import net from 'node:net';
-import { Readable } from 'node:stream';
+import { pipeline, Readable } from 'node:stream';
 import zlib from 'node:zlib';
 import type { Provider, ProviderInfo, RemoteError } from '../shared/api.ts';
+import { plainAddress } from './network.ts';
 import { RemoteFailure, remoteError } from './remote.ts';
 import type { Settings } from './settings.ts';
 
@@ -58,6 +59,8 @@ class Column<T extends number | bigint> {
   end: Uint32Array | BigUint64Array;
   asn = new Uint32Array(1024);
   length = 0;
+  /** iptoasn publishes its table in order: noticing it here spares a sort that would hold up the broker. */
+  private ordered = true;
   private readonly make: (size: number) => Uint32Array | BigUint64Array;
 
   constructor(make: (size: number) => Uint32Array | BigUint64Array) {
@@ -76,6 +79,7 @@ class Column<T extends number | bigint> {
       this.end = grow(this.end, this.make(this.length * 2));
       this.asn = grow(this.asn, new Uint32Array(this.length * 2));
     }
+    if (this.length > 0 && start < (this.start[this.length - 1] as T)) this.ordered = false;
     this.start[this.length] = start as never;
     this.end[this.length] = end as never;
     this.asn[this.length] = asn;
@@ -83,6 +87,13 @@ class Column<T extends number | bigint> {
   }
 
   sorted(): Columns<T> {
+    if (this.ordered) {
+      return {
+        start: this.start.slice(0, this.length) as unknown as ArrayLike<T>,
+        end: this.end.slice(0, this.length) as unknown as ArrayLike<T>,
+        asn: this.asn.slice(0, this.length),
+      };
+    }
     const start = this.start as unknown as ArrayLike<T>;
     const order = Uint32Array.from({ length: this.length }, (_, index) => index).sort((a, b) => {
       const left = start[a] as T;
@@ -130,7 +141,7 @@ export class ProviderTable {
   }
 
   lookup(ip: string | null | undefined): Provider | null {
-    const address = (ip ?? '').replace(/^::ffff:(?=\d+\.)/i, '');
+    const address = plainAddress(ip);
     const v4 = ipv4Number(address);
     const v6 = v4 === null ? ipv6Prefix(address) : null;
     const asn = v4 !== null ? find(this.v4, v4) : v6 !== null ? find(this.v6, v6) : null;
@@ -151,7 +162,7 @@ export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
     const [first = '', last = '', asnText = '', , description = ''] = line.split('\t');
     const asn = Number(asnText);
     if (!Number.isInteger(asn) || asn <= 0 || asn > 4_294_967_295) return;
-    if (v4.length + v6.length >= MAX_ROWS) throw new RemoteFailure('invalid', 'too many ranges');
+    if (v4.length + v6.length >= MAX_ROWS) throw new RemoteFailure('invalid');
     const start4 = ipv4Number(first);
     const end4 = start4 === null ? null : ipv4Number(last);
     if (start4 !== null && end4 !== null && start4 <= end4) v4.push(start4, end4, asn);
@@ -165,8 +176,9 @@ export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
   };
 
   const gunzip = zlib.createGunzip();
-  gzipped.on('error', (error) => gunzip.destroy(error));
-  gzipped.pipe(gunzip).setEncoding('utf8');
+  // Unlike pipe(), closes the source too when the table is refused halfway, so no file stays open.
+  pipeline(gzipped, gunzip, () => undefined);
+  gunzip.setEncoding('utf8');
   let unpacked = 0;
   let rest = '';
   for await (const chunk of gunzip as AsyncIterable<string>) {
@@ -174,7 +186,7 @@ export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
     if (unpacked > MAX_UNPACKED) throw new RemoteFailure('too_large');
     const lines = (rest + chunk).split('\n');
     rest = lines.pop() ?? '';
-    if (rest.length > MAX_LINE) throw new RemoteFailure('invalid', 'line too long');
+    if (rest.length > MAX_LINE) throw new RemoteFailure('invalid');
     for (const line of lines) add(line);
   }
   if (rest) add(rest);
@@ -225,7 +237,8 @@ export class Providers {
       ranges: this.table?.size ?? 0,
       updatedAt: this.updatedAt,
       error: this.error,
-      updating: this.running !== null,
+      // Loading from disk counts: it may be followed by a download, and the page polls only while this is true.
+      updating: this.loading !== null || this.running !== null,
     };
   }
 
@@ -271,7 +284,9 @@ export class Providers {
     await this.refresh().catch(() => undefined);
   }
 
+  /** Turned off, nothing is downloaded: the owner opted out of talking to iptoasn. */
   refresh(): Promise<void> {
+    if (!this.enabled) return Promise.resolve();
     this.running ??= this.download().finally(() => {
       this.running = null;
     });
@@ -295,7 +310,7 @@ export class Providers {
       }
       const data = Buffer.concat(chunks);
       const table = await parseTable(Readable.from([data]));
-      if (table.size < MIN_RANGES) throw new RemoteFailure('invalid', 'too few ranges');
+      if (table.size < MIN_RANGES) throw new RemoteFailure('invalid');
       const temporary = `${this.deps.file}.tmp`;
       fs.writeFileSync(temporary, data, { mode: 0o600 });
       fs.renameSync(temporary, this.deps.file);

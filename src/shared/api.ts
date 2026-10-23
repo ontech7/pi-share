@@ -251,6 +251,8 @@ export const remoteErrorCodes = [
   'timeout',
   'too_large',
   'invalid',
+  /** The saved token or password cannot be opened any more, as after a new master key. */
+  'unreadable',
 ] as const;
 export type RemoteError = { code: (typeof remoteErrorCodes)[number]; detail: string | null };
 
@@ -328,7 +330,12 @@ export const notificationsBody = z.object({
       port: z.number().int().min(1).max(65_535),
       security: z.enum(smtpSecurity),
       user: z.string().trim().max(254),
-      password: secret(256),
+      // Spaces at either end can be part of a real password, but a blank one would replace the saved one by mistake.
+      password: z
+        .string()
+        .max(256)
+        .refine((value) => value.trim().length > 0)
+        .nullable(),
       from: z.email().max(254),
       to: z.email().max(254),
     })

@@ -52,6 +52,7 @@ describe('notification settings', () => {
       { email: { host: 'smtp.example.com\r\nRCPT TO:<x@y.z>' } },
       { email: { to: 'not an address' } },
       { email: { port: 70_000 } },
+      { email: { password: '   ' } },
     ]) {
       expect((await configure(body)).status, JSON.stringify(body)).toBe(400);
     }
@@ -131,6 +132,41 @@ describe('notification settings', () => {
   it('forget a secret on request', async () => {
     const view = (await configure({ ntfy: { token: null } })).body as NotificationSettings;
     expect(view.ntfy.hasToken).toBe(false);
+  });
+});
+
+describe('saved notification secrets', () => {
+  let own: Awaited<ReturnType<typeof startStack>>;
+  const testEmail = () => own.adminCall('POST', '/api/notifications/test', { channel: 'email' });
+
+  beforeAll(async () => {
+    own = await startStack({ 'a.txt': 'aaaa' });
+    own.failNotifications(200);
+    await own.adminCall('PATCH', '/api/notifications', {
+      email: {
+        host: 'smtp.example.com',
+        user: 'me',
+        password: ' with spaces ',
+        from: 'pi@example.com',
+        to: 'me@example.com',
+      },
+    });
+  });
+
+  afterAll(() => own.close());
+
+  it('keep the spaces of an SMTP password', async () => {
+    expect((await testEmail()).status).toBe(200);
+    expect(own.mails.at(-1)?.smtp).toMatchObject({ auth: { user: 'me', pass: ' with spaces ' } });
+  });
+
+  it('say so when one can no longer be opened', async () => {
+    const stored = own.settings.notifications<{ email: Record<string, unknown> }>();
+    if (!stored) throw new Error('no notification settings');
+    own.settings.setNotifications({ ...stored, email: { ...stored.email, sealedPassword: 'not-sealed' } });
+    expect(await testEmail()).toMatchObject({ status: 502, body: { detail: { code: 'unreadable', detail: null } } });
+    const view = (await own.adminCall('GET', '/api/notifications')).body as NotificationSettings;
+    expect(view.status.email.lastError).toEqual({ code: 'unreadable', detail: null });
   });
 });
 
@@ -229,7 +265,9 @@ describe('notifications about links', () => {
       headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
     });
     await settle();
-    expect(stack.sent[0]?.body).toMatchObject({ message: expect.stringContaining('Link pasted into Discord') });
+    expect(stack.sent[0]?.body).toMatchObject({
+      message: expect.stringContaining('Link probably pasted into Discord'),
+    });
   });
 
   it('send nothing for kinds turned off, nor once the channel is off', async () => {

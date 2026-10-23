@@ -286,7 +286,7 @@ try {
   });
   await panel.go(`${ADMIN}${await panel.eval('location.pathname')}`);
   await panel.text('Downloaded and verified');
-  await panel.text('Pasted into Discord');
+  await panel.text('Probably pasted into Discord');
   assert(true, 'a link previewed by a chat app is flagged');
   const counts = await panel.eval(`[...document.querySelectorAll('dl dd')].map((d) => d.textContent)`);
   assert(JSON.stringify(counts) === JSON.stringify(['1', '2', '2', '1', '1']), `counters ${counts.join(', ')}`);

@@ -251,8 +251,10 @@ export const notificationsBody = z.object({
         .url({ protocol: /^https?$/ })
         .max(200)
         .refine((value) => {
+          // Zod runs this even when the URL check above failed.
+          if (!URL.canParse(value) || /[?#]/.test(value)) return false;
           const url = new URL(value);
-          return !url.username && !url.password && !url.search && !url.hash;
+          return !url.username && !url.password;
         }, 'origin_and_path_only'),
       topic: z.string().regex(/^[\w-]{1,64}$/),
       token: secret(200),

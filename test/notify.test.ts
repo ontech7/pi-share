@@ -45,6 +45,7 @@ describe('notification settings', () => {
       { ntfy: { topic: 'has spaces' } },
       { ntfy: { server: 'https://user:secret@ntfy.example.com' } },
       { ntfy: { server: 'https://ntfy.example.com/?token=x' } },
+      { ntfy: { server: 'https://ntfy.example.com/a?' } },
       { telegram: { token: 'not-a-token' } },
       { telegram: { chatId: 'someone' } },
       { email: { host: 'smtp.example.com\r\nRCPT TO:<x@y.z>' } },

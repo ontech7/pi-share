@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
-import type { Provider, ProviderInfo } from '../shared/api.ts';
+import type { Provider, ProviderInfo, RemoteError } from '../shared/api.ts';
+import { RemoteFailure, remoteError } from './remote.ts';
 import type { Settings } from './settings.ts';
 
 const REFRESH_EVERY = 7 * 24 * 60 * 60 * 1000;
@@ -150,7 +151,7 @@ export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
     const [first = '', last = '', asnText = '', , description = ''] = line.split('\t');
     const asn = Number(asnText);
     if (!Number.isInteger(asn) || asn <= 0 || asn > 4_294_967_295) return;
-    if (v4.length + v6.length >= MAX_ROWS) throw new Error('provider data has too many ranges');
+    if (v4.length + v6.length >= MAX_ROWS) throw new RemoteFailure('invalid', 'too many ranges');
     const start4 = ipv4Number(first);
     const end4 = start4 === null ? null : ipv4Number(last);
     if (start4 !== null && end4 !== null && start4 <= end4) v4.push(start4, end4, asn);
@@ -170,10 +171,10 @@ export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
   let rest = '';
   for await (const chunk of gunzip as AsyncIterable<string>) {
     unpacked += chunk.length;
-    if (unpacked > MAX_UNPACKED) throw new Error('provider data too large');
+    if (unpacked > MAX_UNPACKED) throw new RemoteFailure('too_large');
     const lines = (rest + chunk).split('\n');
     rest = lines.pop() ?? '';
-    if (rest.length > MAX_LINE) throw new Error('provider data has a line too long');
+    if (rest.length > MAX_LINE) throw new RemoteFailure('invalid', 'line too long');
     for (const line of lines) add(line);
   }
   if (rest) add(rest);
@@ -195,8 +196,11 @@ export class Providers {
   private readonly deps: ProvidersDeps;
   private table: ProviderTable | null = null;
   private updatedAt: number | null = null;
-  private error: string | null = null;
+  private error: RemoteError | null = null;
   private running: Promise<void> | null = null;
+  private loading: Promise<void> | null = null;
+  /** Read once: lookups run for every event of a link detail. */
+  private enabledNow: boolean | null = null;
 
   constructor(deps: ProvidersDeps) {
     this.deps = deps;
@@ -207,7 +211,8 @@ export class Providers {
   }
 
   get enabled(): boolean {
-    return this.deps.settings.providers(this.deps.enabledDefault).enabled;
+    this.enabledNow ??= this.deps.settings.providers(this.deps.enabledDefault).enabled;
+    return this.enabledNow;
   }
 
   lookup(ip: string | null | undefined): Provider | null {
@@ -224,21 +229,41 @@ export class Providers {
     };
   }
 
+  /** Turned off, the table leaves memory; turned on again, it comes back from the disk or a download. */
   setEnabled(enabled: boolean) {
     this.deps.settings.setProviders({ enabled });
-    if (enabled) void this.maybeRefresh();
+    this.enabledNow = enabled;
+    if (enabled) void this.start();
+    else {
+      this.table = null;
+      this.updatedAt = null;
+      this.error = null;
+    }
   }
 
   /** Loads the table saved on disk, then downloads a fresh one if it is missing or a week old. */
   async start() {
+    if (!this.enabled) return;
+    this.loading ??= this.load().finally(() => {
+      this.loading = null;
+    });
+    await this.loading;
+    await this.maybeRefresh();
+  }
+
+  private async load() {
+    if (this.table) return;
+    const before = this.updatedAt;
     try {
       const stat = fs.statSync(this.deps.file);
-      this.table = await parseTable(fs.createReadStream(this.deps.file));
+      const table = await parseTable(fs.createReadStream(this.deps.file));
+      // A download that finished meanwhile is newer than the file read here, and may be turned off since.
+      if (this.updatedAt !== before || !this.enabled) return;
+      this.table = table;
       this.updatedAt = stat.mtimeMs;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.error = (error as Error).message;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.error = remoteError(error);
     }
-    await this.maybeRefresh();
   }
 
   async maybeRefresh() {
@@ -259,27 +284,27 @@ export class Providers {
         headers: { 'user-agent': this.deps.userAgent },
         signal: AbortSignal.timeout(120_000),
       });
-      if (!response.ok || !response.body) throw new Error(`provider data answered ${response.status}`);
-      if (Number(response.headers.get('content-length') ?? 0) > MAX_DOWNLOAD)
-        throw new Error('provider data too large');
+      if (!response.ok || !response.body) throw new RemoteFailure('status', String(response.status));
+      if (Number(response.headers.get('content-length') ?? 0) > MAX_DOWNLOAD) throw new RemoteFailure('too_large');
       const chunks: Buffer[] = [];
       let size = 0;
       for await (const chunk of response.body) {
         size += chunk.length;
-        if (size > MAX_DOWNLOAD) throw new Error('provider data too large');
+        if (size > MAX_DOWNLOAD) throw new RemoteFailure('too_large');
         chunks.push(Buffer.from(chunk));
       }
       const data = Buffer.concat(chunks);
       const table = await parseTable(Readable.from([data]));
-      if (table.size < MIN_RANGES) throw new Error('provider data looks empty');
+      if (table.size < MIN_RANGES) throw new RemoteFailure('invalid', 'too few ranges');
       const temporary = `${this.deps.file}.tmp`;
       fs.writeFileSync(temporary, data, { mode: 0o600 });
       fs.renameSync(temporary, this.deps.file);
+      if (!this.enabled) return;
       this.table = table;
       this.updatedAt = this.now;
       this.error = null;
     } catch (error) {
-      this.error = (error as Error).message.slice(0, 200);
+      this.error = remoteError(error);
       throw error;
     }
   }

@@ -90,7 +90,7 @@ export async function startStack(
     publicUrl: config.publicUrl,
     maxPasswordFailures: config.maxPasswordFailures,
     providerOf: (ip) => providers.lookup(ip),
-    onEvent: (link, event) => notifier.onEvent(link, event),
+    onEvent: (linkId, event, labelOf) => notifier.onEvent(linkId, event, labelOf),
   });
   await settings.setAdminPassword('correct horse battery');
   // What "GitHub" answers to update checks; tests change it with setRelease.

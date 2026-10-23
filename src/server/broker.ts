@@ -131,12 +131,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   const authorize = (id: string, givenProof: string, visit: Visit) => {
     const link = shares.find(id);
     if (!link || !visit.visitor || !shares.holdsKey(link, givenProof)) return { ok: false as const };
-    // Checked before the password, so nobody outside the allowed networks can even try one.
-    if (!shares.allowsNetwork(link, visit.ip)) {
-      shares.record(id, { ...visit, type: 'refused', detail: 'network' });
-      return { ok: false as const, reason: 'network' as const };
-    }
-    const found = shares.servable(id, visit.visitor);
+    // Before the password: nobody outside the allowed networks, or holding a link that is off, can try one.
+    const found = shares.servable(id, visit);
     if (!found.ok) {
       shares.record(id, { ...visit, type: 'refused', detail: found.reason });
       return { ok: false as const, reason: found.reason };
@@ -144,11 +140,13 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     return { ok: true as const, servable: found.value, visitor: visit.visitor };
   };
 
-  const validTicket = (id: string, visit: Visit, header: unknown): boolean => {
+  /** A ticket is only good for its link, its visitor, the current password and a network the link allows. */
+  const checkTicket = (id: string, visit: Visit, header: unknown): 'ok' | 'invalid' | 'network' => {
     const ticket = vault.readTicket<Ticket>(typeof header === 'string' ? header : undefined);
     const link = shares.find(id);
-    if (!ticket || !link || ticket.l !== id || !visit.visitor || ticket.v !== visit.visitor) return false;
-    return ticket.g === shares.passwordGeneration(link);
+    if (!ticket || !link || ticket.l !== id || !visit.visitor || ticket.v !== visit.visitor) return 'invalid';
+    if (ticket.g !== shares.passwordGeneration(link)) return 'invalid';
+    return shares.allowsNetwork(link, visit.ip) ? 'ok' : 'network';
   };
 
   // The switch applies at once; the count of open links never looks at the disk, so any visitor may ask.
@@ -219,20 +217,15 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const { id, part } = request.params;
       const visit = visitOf(request.headers);
       const visitor = visit.visitor;
-      if (!visitor || !validTicket(id, visit, request.headers[TICKET_HEADER])) {
-        return reply.code(403).send({ error: 'ticket' });
-      }
+      const ticket = checkTicket(id, visit, request.headers[TICKET_HEADER]);
+      if (!visitor || ticket === 'invalid') return reply.code(403).send({ error: 'ticket' });
 
-      const found = shares.servable(id, visitor);
+      // A ticket does not carry over to another network, such as after leaving the VPN.
+      const found = shares.servable(id, visit);
       if (!found.ok) {
         shares.record(id, { ...visit, type: 'refused', detail: found.reason });
         // The ticket already proves the key: tell why, so retries are not counted as guesses.
         return unavailable(reply, found.reason);
-      }
-      // A ticket does not carry over to another network, such as after leaving the VPN.
-      if (!shares.allowsNetwork(found.value.link, visit.ip)) {
-        shares.record(id, { ...visit, type: 'refused', detail: 'network' });
-        return unavailable(reply, 'network');
       }
       const { entries } = found.value.content;
       const selected = part === 'all' ? entries : entries.filter((entry) => entry.id === part);
@@ -365,9 +358,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     async (request, reply) => {
       const { id, downloadId } = request.params;
       const visit = visitOf(request.headers);
-      if (!validTicket(id, visit, request.headers[TICKET_HEADER])) return reply.code(403).send({ error: 'ticket' });
-      const link = shares.find(id);
-      if (!link || !shares.allowsNetwork(link, visit.ip)) return reply.code(404).send({ error: 'unknown_download' });
+      if (checkTicket(id, visit, request.headers[TICKET_HEADER]) !== 'ok')
+        return reply.code(403).send({ error: 'ticket' });
       if (!shares.startedBy(id, downloadId, visit.visitor) || shares.hasResult(id, downloadId)) {
         return reply.code(404).send({ error: 'unknown_download' });
       }

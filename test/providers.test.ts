@@ -109,7 +109,36 @@ describe('a bad provider download', () => {
     await stack.providers.start();
     const info = stack.providers.info();
     expect(info.ranges).toBe(0);
-    expect(info.error).toMatch(/empty/);
+    expect(info.error).toEqual({ code: 'invalid', detail: 'too few ranges' });
     expect(fs.existsSync(`${stack.root}/data/ip2asn.tsv.gz`)).toBe(false);
+  });
+});
+
+describe('provider table lifecycle', () => {
+  let stack: Awaited<ReturnType<typeof startStack>>;
+
+  beforeAll(async () => {
+    stack = await startStack({ 'a.txt': 'aaaa' }, {}, { providerData: table() });
+  });
+
+  afterAll(() => stack.close());
+
+  it('never lets the older table on disk replace a newer download', async () => {
+    const stale = table(['2001:4bb8::\t2001:4bbf:ffff:ffff:ffff:ffff:ffff:ffff\t64999\tAT\tSTALE Old Name']);
+    fs.mkdirSync(`${stack.root}/data`, { recursive: true });
+    fs.writeFileSync(`${stack.root}/data/ip2asn.tsv.gz`, stale);
+    fs.utimesSync(`${stack.root}/data/ip2asn.tsv.gz`, new Date(0), new Date(0));
+    await Promise.all([stack.providers.start(), stack.providers.refresh()]);
+    expect(stack.providers.lookup('2001:4bb8::1')?.asn).toBe(8447);
+  });
+
+  it('lets the table go when turned off and loads it back when turned on', async () => {
+    stack.providers.setEnabled(false);
+    expect(stack.providers.info()).toMatchObject({ enabled: false, ranges: 0 });
+    await stack.providers.start();
+    expect(stack.providers.info().ranges).toBe(0);
+    stack.providers.setEnabled(true);
+    await stack.providers.start();
+    expect(stack.providers.lookup('2001:4bb8::1')?.asn).toBe(8447);
   });
 });

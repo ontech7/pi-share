@@ -264,10 +264,11 @@ export function LinkScreen({ id }: { id: string }) {
  */
 function PastedInChats({ link }: { link: LinkDetail }) {
   const { t, lang } = useI18n();
-  const previews = link.events.filter((event) => event.type === 'preview');
+  // Only a chat app it can name: anyone who knows the link id can fetch it with curl, without the key.
+  const previews = link.events.filter((event) => event.type === 'preview' && previewApp(event.userAgent));
   if (previews.length === 0) return null;
-  const known = [...new Set(previews.map((event) => previewApp(event.userAgent)).filter((app) => app !== null))];
-  const apps = known.length ? new Intl.ListFormat(lang, { type: 'conjunction' }).format(known) : t('notify.chatApp');
+  const known = [...new Set(previews.map((event) => previewApp(event.userAgent) as string))];
+  const apps = new Intl.ListFormat(lang, { type: 'conjunction' }).format(known);
   const last = Math.max(...previews.map((event) => event.at));
   return (
     <Card className="flex gap-3 border-warn/40 p-4">

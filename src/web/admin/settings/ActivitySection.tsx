@@ -10,6 +10,7 @@ import { Switch } from '../../ui/Switch.tsx';
 import { useToast } from '../../ui/Toaster.tsx';
 import { api, keys } from '../api.ts';
 import { SettingRow } from './Row.tsx';
+import { describeRemote } from './remote.ts';
 
 export function ActivitySection() {
   return <ProvidersCard />;
@@ -51,7 +52,7 @@ function ProvidersCard() {
             ) : info.error ? (
               <span className="flex items-center gap-1.5 text-danger">
                 <CircleAlert className="size-4 shrink-0" />
-                {t('providers.error', { error: info.error })}
+                {t('providers.error', { error: describeRemote(t, info.error) })}
               </span>
             ) : info.updatedAt ? (
               t('providers.updated', {

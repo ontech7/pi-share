@@ -61,6 +61,11 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
         const { icon: Icon, tone } = ICONS[event.type] ?? { icon: CircleX, tone: 'text-muted' };
         const app = event.type === 'preview' ? previewApp(event.userAgent) : null;
         const agent = app ? null : parseAgent(event.userAgent);
+        const title = app
+          ? t('notify.preview', { app })
+          : event.type === 'preview'
+            ? t('event.bot')
+            : t(`event.${event.type}`);
         const isDownload = event.type.startsWith('download_');
         const fileName =
           event.path ??
@@ -84,7 +89,7 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
             <div className="min-w-0 flex-1 pt-1">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                 <p className="text-sm font-medium">
-                  {app ? t('notify.preview', { app }) : t(`event.${event.type}`)}
+                  {title}
                   {fileName && <span className="font-normal text-muted"> · {fileName}</span>}
                 </p>
                 <time className="text-xs text-muted tabular" dateTime={new Date(event.at).toISOString()}>

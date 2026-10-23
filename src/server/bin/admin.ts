@@ -40,7 +40,7 @@ const shares = new Shares({
   publicUrl: config.publicUrl,
   maxPasswordFailures: config.maxPasswordFailures,
   providerOf: (ip) => providers.lookup(ip),
-  onEvent: (link, event) => notifier.onEvent(link, event),
+  onEvent: (linkId, event, labelOf) => notifier.onEvent(linkId, event, labelOf),
 });
 
 const updates = new Updates({

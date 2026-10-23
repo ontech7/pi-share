@@ -10,6 +10,7 @@ import type {
   LinkState,
   LinkSummary,
   Provider,
+  RefusalReason,
   UpdateLinkBody,
 } from '../shared/api.ts';
 import { createLinkBody, updateLinkBody } from '../shared/api.ts';
@@ -80,8 +81,8 @@ export type SharesDeps = {
   publicUrl: string;
   maxPasswordFailures: number;
   providerOf?: (ip: string | null) => Provider | null;
-  /** Told about every event after it is saved, with the link it belongs to. */
-  onEvent?: (link: { id: string; label: string }, event: NewEvent) => void;
+  /** Told about every event after it is saved; the label is read only if the listener needs it. */
+  onEvent?: (linkId: string, event: NewEvent, labelOf: () => string | null) => void;
 };
 
 export class Shares {
@@ -360,14 +361,16 @@ export class Shares {
 
   /**
    * What the broker may serve right now to this visitor, or why not. A link whose limit is reached keeps
-   * serving the people who already got the files: they may retry or fetch the other files.
+   * serving the people who already got the files: they may retry or fetch the other files. The network
+   * comes first, so someone outside the allowed ones learns nothing about the link's state.
    */
   servable(
     id: string,
-    visitor?: string | null,
-  ): { ok: true; value: ServableLink } | { ok: false; reason: LinkState | 'not_found' } {
+    { visitor, ip }: Pick<Visit, 'visitor' | 'ip'>,
+  ): { ok: true; value: ServableLink } | { ok: false; reason: RefusalReason | 'not_found' } {
     const link = this.db.select().from(links).where(eq(links.id, id)).get();
     if (!link) return { ok: false, reason: 'not_found' };
+    if (!this.allowsNetwork(link, ip)) return { ok: false, reason: 'network' };
     const content = this.inspect(link);
     const counts = this.counts(id).get(id) ?? EMPTY_COUNTS;
     const state = this.stateOf(link, content, counts, !!visitor && this.isRecipient(id, visitor));
@@ -395,10 +398,11 @@ export class Shares {
         counted: event.counted ?? false,
       })
       .run();
-    if (this.onEvent) {
-      const link = this.db.select({ id: links.id, label: links.label }).from(links).where(eq(links.id, linkId)).get();
-      if (link) this.onEvent(link, event);
-    }
+    this.onEvent?.(
+      linkId,
+      event,
+      () => this.db.select({ label: links.label }).from(links).where(eq(links.id, linkId)).get()?.label ?? null,
+    );
   }
 
   private startedDownload(linkId: string, downloadId: string) {

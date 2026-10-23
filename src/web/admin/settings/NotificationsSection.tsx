@@ -18,6 +18,7 @@ import { Switch } from '../../ui/Switch.tsx';
 import { useToast } from '../../ui/Toaster.tsx';
 import { ApiError, api, keys } from '../api.ts';
 import { SettingRow } from './Row.tsx';
+import { describeRemote } from './remote.ts';
 
 const KIND_LABELS = {
   opens: 'notifications.opens',
@@ -30,31 +31,32 @@ const KIND_LABELS = {
 const randomTopic = () =>
   `pi-share-${Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) => b.toString(36).padStart(2, '0')).join('')}`;
 
-type ChannelProps = {
-  data: NotificationSettings;
-  save: (patch: NotificationsBody, done?: () => void) => void;
-  saving: boolean;
-};
+type ChannelProps = { data: NotificationSettings };
+type Save = ReturnType<typeof useSave>;
 
-export function NotificationsSection() {
+/** Each card saves on its own, so one card's save never waits on, or spins with, another's. */
+function useSave() {
   const { t, lang } = useI18n();
   const notify = useToast();
   const queryClient = useQueryClient();
-  const notifications = useQuery({ queryKey: keys.notifications, queryFn: api.notifications });
-  const set = (view: NotificationSettings) => queryClient.setQueryData(keys.notifications, view);
-  const fail = (error: Error) =>
-    notify(
-      error instanceof ApiError && error.code === 'incomplete' ? t('notifications.incomplete') : t('common.error'),
-      'error',
-    );
   // Notifications are written in the language of the admin they were last set up in.
   const mutation = useMutation({
     mutationFn: (patch: NotificationsBody) => api.updateNotifications({ ...patch, lang }),
-    onSuccess: set,
-    onError: fail,
+    onSuccess: (view) => queryClient.setQueryData(keys.notifications, view),
+    onError: (error) =>
+      notify(
+        error instanceof ApiError && error.code === 'incomplete' ? t('notifications.incomplete') : t('common.error'),
+        'error',
+      ),
   });
-  const save = (patch: NotificationsBody, done?: () => void) => mutation.mutate(patch, { onSuccess: () => done?.() });
+  return {
+    save: (patch: NotificationsBody, done?: () => void) => mutation.mutate(patch, { onSuccess: () => done?.() }),
+    saving: mutation.isPending,
+  };
+}
 
+export function NotificationsSection() {
+  const notifications = useQuery({ queryKey: keys.notifications, queryFn: api.notifications });
   const data = notifications.data;
   if (!data) {
     return (
@@ -63,32 +65,37 @@ export function NotificationsSection() {
       </Card>
     );
   }
-  const props = { data, save, saving: mutation.isPending };
-  const anyChannel = data.ntfy.enabled || data.telegram.enabled || data.email.enabled;
   return (
     <div className="flex flex-col gap-4">
-      <NtfyCard {...props} />
-      <TelegramCard {...props} />
-      <EmailCard {...props} />
-      <Card className="divide-y divide-line">
-        <div className="px-4 py-4 sm:px-5">
-          <p className="text-[15px] font-medium">{t('notifications.kinds')}</p>
-          <p className="mt-1 text-sm text-muted">
-            {anyChannel ? t('notifications.hint') : t('notifications.noChannel')}
-          </p>
-        </div>
-        {notificationKinds.map((kind) => (
-          <SettingRow key={kind} label={t(KIND_LABELS[kind])}>
-            <Switch
-              checked={data.kinds[kind]}
-              disabled={!anyChannel}
-              onChange={(on) => save({ kinds: { [kind]: on } })}
-              label={t(KIND_LABELS[kind])}
-            />
-          </SettingRow>
-        ))}
-      </Card>
+      <NtfyCard data={data} />
+      <TelegramCard data={data} />
+      <EmailCard data={data} />
+      <KindsCard data={data} />
     </div>
+  );
+}
+
+function KindsCard({ data }: ChannelProps) {
+  const { t } = useI18n();
+  const { save } = useSave();
+  const anyChannel = data.ntfy.enabled || data.telegram.enabled || data.email.enabled;
+  return (
+    <Card className="divide-y divide-line">
+      <div className="px-4 py-4 sm:px-5">
+        <p className="text-[15px] font-medium">{t('notifications.kinds')}</p>
+        <p className="mt-1 text-sm text-muted">{anyChannel ? t('notifications.hint') : t('notifications.noChannel')}</p>
+      </div>
+      {notificationKinds.map((kind) => (
+        <SettingRow key={kind} label={t(KIND_LABELS[kind])}>
+          <Switch
+            checked={data.kinds[kind]}
+            disabled={!anyChannel}
+            onChange={(on) => save({ kinds: { [kind]: on } })}
+            label={t(KIND_LABELS[kind])}
+          />
+        </SettingRow>
+      ))}
+    </Card>
   );
 }
 
@@ -106,14 +113,15 @@ function Channel({
   clear,
   toPatch,
   children,
-}: ChannelProps & {
-  channel: NotificationChannel;
-  ready: boolean;
-  dirty: boolean;
-  clear: () => void;
-  toPatch: () => NotificationsBody;
-  children: ReactNode;
-}) {
+}: ChannelProps &
+  Save & {
+    channel: NotificationChannel;
+    ready: boolean;
+    dirty: boolean;
+    clear: () => void;
+    toPatch: () => NotificationsBody;
+    children: ReactNode;
+  }) {
   const { t } = useI18n();
   const notify = useToast();
   const queryClient = useQueryClient();
@@ -178,7 +186,7 @@ function Channel({
           {status.lastError && (
             <p className="flex items-start gap-1.5 text-sm break-words text-danger" role="status">
               <CircleAlert className="mt-0.5 size-4 shrink-0" />
-              {t('notifications.lastError', { error: status.lastError })}
+              {t('notifications.lastError', { error: describeRemote(t, status.lastError) })}
             </p>
           )}
         </form>
@@ -226,16 +234,18 @@ function SecretField({
   );
 }
 
-function NtfyCard(props: ChannelProps) {
+function NtfyCard({ data }: ChannelProps) {
   const { t } = useI18n();
-  const { ntfy } = props.data;
+  const saving = useSave();
+  const { ntfy } = data;
   const saved = { server: ntfy.server, topic: ntfy.topic, token: '' };
   const [draft, setDraft] = useState<typeof saved | null>(null);
   const form = draft ?? saved;
   const edit = (patch: Partial<typeof saved>) => setDraft({ ...form, ...patch });
   return (
     <Channel
-      {...props}
+      data={data}
+      {...saving}
       channel="ntfy"
       ready={!!ntfy.topic}
       dirty={draft !== null}
@@ -280,22 +290,24 @@ function NtfyCard(props: ChannelProps) {
         saved={ntfy.hasToken}
         value={form.token}
         onChange={(token) => edit({ token })}
-        onRemove={() => props.save({ ntfy: { token: null } })}
+        onRemove={() => saving.save({ ntfy: { token: null } })}
       />
     </Channel>
   );
 }
 
-function TelegramCard(props: ChannelProps) {
+function TelegramCard({ data }: ChannelProps) {
   const { t } = useI18n();
-  const { telegram } = props.data;
+  const saving = useSave();
+  const { telegram } = data;
   const saved = { token: '', chatId: telegram.chatId };
   const [draft, setDraft] = useState<typeof saved | null>(null);
   const form = draft ?? saved;
   const edit = (patch: Partial<typeof saved>) => setDraft({ ...form, ...patch });
   return (
     <Channel
-      {...props}
+      data={data}
+      {...saving}
       channel="telegram"
       ready={telegram.hasToken && !!telegram.chatId}
       dirty={draft !== null}
@@ -331,9 +343,10 @@ const SECURITY = [
   { value: 'none', label: 'notifications.securityNone', port: 25 },
 ] as const;
 
-function EmailCard(props: ChannelProps) {
+function EmailCard({ data }: ChannelProps) {
   const { t } = useI18n();
-  const { email } = props.data;
+  const saving = useSave();
+  const { email } = data;
   const saved = {
     host: email.host,
     port: String(email.port),
@@ -348,7 +361,8 @@ function EmailCard(props: ChannelProps) {
   const edit = (patch: Partial<typeof saved>) => setDraft({ ...form, ...patch });
   return (
     <Channel
-      {...props}
+      data={data}
+      {...saving}
       channel="email"
       ready={!!email.host && !!email.from && !!email.to}
       dirty={draft !== null}
@@ -419,7 +433,7 @@ function EmailCard(props: ChannelProps) {
           saved={email.hasPassword}
           value={form.password}
           onChange={(password) => edit({ password })}
-          onRemove={() => props.save({ email: { password: null } })}
+          onRemove={() => saving.save({ email: { password: null } })}
         />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">

@@ -125,6 +125,20 @@ describe('links restricted to networks', () => {
     expect(response.json().reason).toBe('network');
   });
 
+  it('does not take download results from another network either', async () => {
+    const link = await create({ allowedNetworks: ['198.51.100.0/24'] });
+    const { visitor, body } = await grant(link, '198.51.100.20');
+    const moved = { ...visitor, ip: '203.0.113.7' };
+    const result = await stack.call(
+      moved,
+      'POST',
+      `/api/links/${link.id}/downloads/abcdef123/result`,
+      { ok: true },
+      body.ticket,
+    );
+    expect(result.statusCode).toBe(403);
+  });
+
   it('keeps working for anyone when no network is listed', async () => {
     const link = await create({});
     expect(link.allowedNetworks).toEqual([]);

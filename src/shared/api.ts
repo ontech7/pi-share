@@ -201,7 +201,7 @@ export type ProviderInfo = {
   /** Address ranges in the table on disk, 0 until the first download. */
   ranges: number;
   updatedAt: number | null;
-  error: string | null;
+  error: RemoteError | null;
   updating: boolean;
 };
 export const providersBody = z.object({ enabled: z.boolean() });
@@ -213,7 +213,19 @@ export type NotificationChannel = (typeof notificationChannels)[number];
 export const notificationLangs = ['en', 'it'] as const;
 export const smtpSecurity = ['tls', 'starttls', 'none'] as const;
 
-export type ChannelStatus = { lastSentAt: number | null; lastError: string | null };
+/** Why talking to an outside server failed, as a code the admin translates and, at most, the server's words. */
+export const remoteErrorCodes = [
+  'status',
+  'rejected',
+  'auth',
+  'unreachable',
+  'timeout',
+  'too_large',
+  'invalid',
+] as const;
+export type RemoteError = { code: (typeof remoteErrorCodes)[number]; detail: string | null };
+
+export type ChannelStatus = { lastSentAt: number | null; lastError: RemoteError | null };
 
 /** What the admin sees: secrets only as "one is saved". */
 export type NotificationSettings = {

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { LinkDetail, NotificationSettings } from '../src/shared/api.ts';
+import { keyProof } from '../src/shared/wire.ts';
 import { startStack } from './stack.ts';
 
 let stack: Awaited<ReturnType<typeof startStack>>;
@@ -99,19 +100,25 @@ describe('notification settings', () => {
     });
   });
 
-  it('report why a channel failed, without its secret', async () => {
-    stack.failNotifications(
-      401,
-      JSON.stringify({ ok: false, description: `Unauthorized ${BOT_TOKEN}` }),
-      new Error('Invalid login: 535 smtp-secret rejected'),
-    );
+  it('report why a channel failed as a code, with what the server said but not the secret', async () => {
+    const smtpError = Object.assign(new Error('Invalid login: 535 smtp-secret rejected'), {
+      code: 'EAUTH',
+      response: '535 smtp-secret rejected',
+    });
+    stack.failNotifications(401, JSON.stringify({ ok: false, description: `Unauthorized ${BOT_TOKEN}` }), smtpError);
     const telegram = await stack.adminCall('POST', '/api/notifications/test', { channel: 'telegram' });
     expect(telegram).toMatchObject({ status: 502, body: { error: 'notify_failed', channel: 'telegram' } });
-    expect(telegram.body.detail).toBe('Telegram answered 401: Unauthorized ***');
+    expect(telegram.body.detail).toEqual({ code: 'rejected', detail: 'Unauthorized ***' });
     const email = await stack.adminCall('POST', '/api/notifications/test', { channel: 'email' });
-    expect(email.body.detail).toBe('Invalid login: 535 *** rejected');
+    expect(email.body.detail).toEqual({ code: 'auth', detail: '535 *** rejected' });
+    stack.failNotifications(404);
+    const ntfy = await stack.adminCall('POST', '/api/notifications/test', { channel: 'ntfy' });
+    expect(ntfy.body.detail).toEqual({ code: 'status', detail: '404' });
+    stack.failNotifications(200, '{}', Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNECTION' }));
+    const unreachable = await stack.adminCall('POST', '/api/notifications/test', { channel: 'email' });
+    expect(unreachable.body.detail).toEqual({ code: 'unreachable', detail: null });
     const view = (await stack.adminCall('GET', '/api/notifications')).body as NotificationSettings;
-    expect(view.status.telegram.lastError).toContain('401');
+    expect(view.status.telegram.lastError).toEqual({ code: 'rejected', detail: 'Unauthorized ***' });
     expect(JSON.stringify(view)).not.toContain('smtp-secret');
   });
 
@@ -180,6 +187,34 @@ describe('notifications about links', () => {
     ]);
   });
 
+  it('say nothing when a script or a crawler, not a chat app, fetches the link', async () => {
+    const link = await create();
+    for (const agent of ['curl/8.4.0', 'Googlebot/2.1', 'python-requests/2.31'])
+      await stack.edge.inject({ method: 'GET', url: `/d/${link.id}`, headers: { 'user-agent': agent } });
+    await settle();
+    expect(stack.sent).toHaveLength(0);
+  });
+
+  it('call Tor exits Tor and leave unknown places out', async () => {
+    const link = await create();
+    for (const [country, ip] of [
+      ['T1', '198.51.100.61'],
+      ['XX', '198.51.100.62'],
+    ] as const) {
+      const visitor = await stack.visit(link.id, ip);
+      await stack.edge.inject({
+        method: 'POST',
+        url: `/api/links/${link.id}/open`,
+        payload: { proof: await keyProof(stack.keyOf(link).key, link.id) },
+        headers: { cookie: visitor.cookie, 'cf-connecting-ip': ip, 'cf-ipcountry': country },
+      });
+    }
+    await settle();
+    const [tor, unknown] = messages().map((m) => m.message.split('\n')[1] ?? '');
+    expect(tor).toMatch(/^Tor/);
+    expect(unknown).not.toMatch(/XX|^ /);
+  });
+
   it('name the chat app a link was pasted into', async () => {
     const link = await create();
     await stack.edge.inject({
@@ -213,6 +248,17 @@ describe('notifications about links', () => {
     expect(titles.filter((title) => title === 'Busy')).toHaveLength(5);
     expect(messages().filter((m) => m.message.includes('Wrong password'))).toHaveLength(1);
     expect(titles).toContain('Quiet');
+  });
+
+  it('keep the warnings of one link from hiding those of the others', async () => {
+    const attacked = await create({ label: 'Attacked', allowedNetworks: ['192.0.2.0/24'] });
+    for (let i = 0; i < 15; i++) await stack.open(await stack.visit(attacked.id, `198.51.100.${150 + i}`), attacked);
+    const other = await create({ label: 'Other', password: 'right-pass' });
+    await stack.unlock(await stack.visit(other.id, '198.51.100.199'), other, 'wrong-pass');
+    await settle();
+    const titles = stack.sent.map((sent) => (sent.body as { title: string }).title);
+    expect(titles.filter((title) => title === 'Attacked')).toHaveLength(10);
+    expect(titles).toContain('Other');
   });
 
   it('never let a failing channel get in the way of a visit', async () => {

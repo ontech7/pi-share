@@ -13,6 +13,7 @@ import { countryFlag } from '../web/lib/format.ts';
 import { type Lang, translator } from '../web/lib/i18n.ts';
 import { parseAgent, previewApp } from '../web/lib/ua.ts';
 import type { Vault } from './crypto.ts';
+import { RemoteFailure, remoteError } from './remote.ts';
 import type { Settings } from './settings.ts';
 import { type NewEvent, ShareError } from './shares.ts';
 
@@ -20,11 +21,12 @@ import { type NewEvent, ShareError } from './shares.ts';
 const QUIET = 15 * 60 * 1000;
 /**
  * How many notifications fit in a window: per link, so one busy (or abused) link cannot use up the others'
- * share, and overall. Warnings have their own budget, so a flood of opens cannot hide wrong passwords; a lock
- * happens once per lock and always goes out.
+ * share, and overall. Warnings have budgets of their own, per link and overall, so a flood of opens cannot
+ * hide wrong passwords, nor one attacked link the warnings of the others; a lock happens once per lock and
+ * always goes out.
  */
 const WINDOW = 10 * 60 * 1000;
-const BUDGET = { perLink: 5, overall: 30, warnings: 30 };
+const BUDGET = { perLink: 5, overall: 30, warningsPerLink: 10, warnings: 30 };
 const TIMEOUT = 15_000;
 
 type Email = NotificationSettings['email'];
@@ -74,7 +76,7 @@ export type NotifierDeps = {
   now?: () => number;
 };
 
-/** Which notification an event makes, if any. */
+/** Which notification an event makes, if any. A preview counts only from a chat app it can name. */
 function kindOf(event: NewEvent): NotificationKind | null {
   switch (event.type) {
     case 'open':
@@ -87,7 +89,7 @@ function kindOf(event: NewEvent): NotificationKind | null {
     case 'refused':
       return event.detail === 'network' || event.detail === 'exhausted' ? 'warnings' : null;
     case 'preview':
-      return 'previews';
+      return previewApp(event.userAgent ?? null) ? 'previews' : null;
     default:
       return null;
   }
@@ -200,22 +202,29 @@ export class Notifier {
   }
 
   /** Called for every recorded event; whatever happens here, recording the event goes on. */
-  onEvent(link: { id: string; label: string }, event: NewEvent) {
+  onEvent(linkId: string, event: NewEvent, labelOf: () => string | null) {
     try {
-      const stored = this.stored();
+      // Most events never make a notification: they cost nothing past this line.
       const kind = kindOf(event);
+      if (!kind) return;
+      const stored = this.stored();
       const channels = notificationChannels.filter((channel) => stored[channel].enabled && complete(stored, channel));
-      if (!kind || !stored.kinds[kind] || channels.length === 0) return;
+      if (!stored.kinds[kind] || channels.length === 0) return;
+      const label = labelOf();
+      if (label === null) return;
       const who = event.type === 'preview' ? '' : (event.visitor ?? event.ip ?? '');
-      const key = `${link.id} ${event.type} ${event.detail ?? ''} ${who}`;
+      const key = `${linkId} ${event.type} ${event.detail ?? ''} ${who}`;
       const now = this.now;
       if (event.type !== 'locked') {
         if (now - (this.lastSent.get(key) ?? 0) < QUIET) return;
         const budgets: [string, number][] =
           kind === 'warnings'
-            ? [['warnings', BUDGET.warnings]]
+            ? [
+                [`warnings ${linkId}`, BUDGET.warningsPerLink],
+                ['warnings', BUDGET.warnings],
+              ]
             : [
-                [`link ${link.id}`, BUDGET.perLink],
+                [`link ${linkId}`, BUDGET.perLink],
                 ['overall', BUDGET.overall],
               ];
         for (const [budget] of budgets) this.sentIn.set(budget, this.spent(budget, now));
@@ -225,7 +234,7 @@ export class Notifier {
       this.lastSent.set(key, now);
       for (const [stale, at] of this.lastSent) if (now - at >= QUIET) this.lastSent.delete(stale);
       for (const budget of this.sentIn.keys()) if (this.spent(budget, now).length === 0) this.sentIn.delete(budget);
-      const message = this.compose(stored.lang, link.label, kind, event);
+      const message = this.compose(stored.lang, label, kind, event);
       for (const channel of channels) void this.send(stored, channel, message).catch(() => undefined);
     } catch {
       // a notification is never worth failing a visit for
@@ -256,10 +265,11 @@ export class Notifier {
       event.type === 'refused'
         ? t(event.detail === 'network' ? 'notify.refusedNetwork' : 'notify.refusedExhausted')
         : event.type === 'preview'
-          ? t('notify.preview', { app: previewApp(event.userAgent ?? null) ?? t('notify.chatApp') })
+          ? t('notify.preview', { app: previewApp(event.userAgent ?? null) ?? '' })
           : t(`event.${event.type}`);
-    const country =
-      event.country && /^[A-Z]{2}$/i.test(event.country) ? `${countryFlag(event.country)} ${event.country}` : '';
+    // Cloudflare marks Tor exits with T1 and unknown places with XX: neither is a country.
+    const flag = countryFlag(event.country ?? null);
+    const country = event.country?.toUpperCase() === 'T1' ? 'Tor' : flag ? `${flag} ${event.country}` : '';
     const details = [
       country,
       provider && `${provider.name}${provider.hosting ? ` (${t('provider.hosting')})` : ''}`,
@@ -288,9 +298,10 @@ export class Notifier {
       else await this.email(stored.email, plain, message);
       this.status[channel] = { lastSentAt: this.now, lastError: null };
     } catch (error) {
-      // Whatever the error says, the secret never ends up in what the admin is shown.
-      const text = ((error as Error).message || 'unreachable').split(plain || '\0').join('***');
-      this.status[channel] = { ...this.status[channel], lastError: text.slice(0, 200) };
+      const { code, detail } = remoteError(error);
+      // Whatever the server says, the secret never ends up in what the admin is shown.
+      const redacted = detail === null ? null : detail.split(plain || '\0').join('***');
+      this.status[channel] = { ...this.status[channel], lastError: { code, detail: redacted } };
       throw error;
     }
   }
@@ -314,7 +325,7 @@ export class Notifier {
       { topic: settings.topic, ...message },
       token ? { authorization: `Bearer ${token}` } : {},
     );
-    if (!response.ok) throw new Error(`ntfy answered ${response.status}`);
+    if (!response.ok) throw new RemoteFailure('status', String(response.status));
   }
 
   private async telegram(chatId: string, token: string, message: Message) {
@@ -330,7 +341,9 @@ export class Notifier {
       } catch {
         // not JSON: the status says enough
       }
-      throw new Error(`Telegram answered ${response.status}${description ? `: ${description}` : ''}`);
+      throw description
+        ? new RemoteFailure('rejected', description)
+        : new RemoteFailure('status', String(response.status));
     }
   }
 

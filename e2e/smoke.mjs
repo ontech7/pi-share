@@ -300,7 +300,8 @@ try {
   await panel.click('Continue');
   await panel.click('Follow the changes');
   await panel.type('dialog textarea', 'not a network');
-  await panel.text('Not an address or a range');
+  await panel.eval(`document.querySelector('dialog textarea').blur()`);
+  await panel.text('Not addresses or ranges');
   assert(
     await panel.eval(
       `[...document.querySelectorAll('dialog button')].find((b) => b.textContent.includes('Create link')).disabled`,
@@ -354,7 +355,7 @@ try {
   await outside.shot('14-network-refused-mobile', { width: 390, height: 844, mobile: true });
   await panel.go(`${ADMIN}/links/${restricted.id}`);
   await panel.text('203.0.113.0/24');
-  await panel.text('network');
+  await panel.text('from a network the link does not allow');
   await panel.shot('15-network-activity');
 
   console.log('settings');
@@ -372,7 +373,7 @@ try {
 
   await panel.click('Activity');
   await panel.text('Show the provider');
-  await panel.eval(`document.querySelector('[role=switch][aria-label="Telegram"]').click()`);
+  await panel.eval(`document.querySelector('[role=switch][aria-label="Notify via Telegram"]').click()`);
   await panel.text('Bot token');
   await panel.shot('13-activity');
   await panel.shot('13-activity-mobile', { width: 390, height: 1600, mobile: true });

@@ -131,14 +131,12 @@ export function LinkScreen({ id }: { id: string }) {
                 {data.hasPassword ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
                 {t('detail.password')}: {data.hasPassword ? t('detail.passwordSet') : t('detail.passwordNone')}
               </span>
-              <span className="flex items-center gap-1" title={data.allowedNetworks.join('\n') || undefined}>
-                <Network className="size-3.5" />
-                {data.allowedNetworks.length === 0
-                  ? t('networks.any')
-                  : data.allowedNetworks.length === 1
-                    ? (data.allowedNetworks[0] as string)
-                    : t('networks.count', { n: data.allowedNetworks.length })}
-              </span>
+              {data.allowedNetworks.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <Network className="size-3.5" />
+                  <span className="font-mono">{data.allowedNetworks.join(', ')}</span>
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-3 rounded-full border border-line bg-surface py-1 pr-1 pl-4">
@@ -268,14 +266,15 @@ function PastedInChats({ link }: { link: LinkDetail }) {
   const { t, lang } = useI18n();
   const previews = link.events.filter((event) => event.type === 'preview');
   if (previews.length === 0) return null;
-  const apps = [...new Set(previews.map((event) => previewApp(event.userAgent) ?? t('notify.chatApp')))];
+  const known = [...new Set(previews.map((event) => previewApp(event.userAgent)).filter((app) => app !== null))];
+  const apps = known.length ? new Intl.ListFormat(lang, { type: 'conjunction' }).format(known) : t('notify.chatApp');
   const last = Math.max(...previews.map((event) => event.at));
   return (
     <Card className="flex gap-3 border-warn/40 p-4">
       <MessageSquareWarning className="mt-0.5 size-5 shrink-0 text-warn" />
       <div className="flex min-w-0 flex-col gap-1">
         <p className="text-[15px] font-medium">
-          {t('detail.pastedTitle', { apps: apps.join(', '), when: formatDateTime(last, lang) })}
+          {t('detail.pastedTitle', { apps, when: formatDateTime(last, lang, { seconds: false }) })}
         </p>
         <p className="text-sm text-muted">
           {t('detail.pastedBody')} {!link.hasPassword && t('detail.pastedNoPassword')}

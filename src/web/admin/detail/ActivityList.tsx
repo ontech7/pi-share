@@ -18,6 +18,7 @@ import type { EventType, EventView, LinkItemView } from '../../../shared/api.ts'
 import { countryFlag, formatBytes, formatDateTime } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 import { parseAgent, previewApp } from '../../lib/ua.ts';
+import { Badge } from '../../ui/Badge.tsx';
 
 const ICONS: Record<EventType, { icon: LucideIcon; tone: string }> = {
   preview: { icon: Bot, tone: 'text-muted' },
@@ -32,6 +33,16 @@ const ICONS: Record<EventType, { icon: LucideIcon; tone: string }> = {
   download_failed: { icon: OctagonX, tone: 'text-danger' },
   refused: { icon: Ban, tone: 'text-warn' },
 };
+
+const REFUSALS = {
+  network: 'refused.network',
+  expired: 'refused.expired',
+  exhausted: 'refused.exhausted',
+  disabled: 'refused.disabled',
+  locked: 'refused.locked',
+  paused: 'refused.paused',
+  unavailable: 'refused.unavailable',
+} as const;
 
 export function ActivityList({ events, items }: { events: EventView[]; items: LinkItemView[] }) {
   const { t, lang } = useI18n();
@@ -89,11 +100,7 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
                 {event.provider && (
                   <span title={`AS${event.provider.asn}`} className="flex items-center gap-1.5">
                     {event.provider.name}
-                    {event.provider.hosting && (
-                      <span className="rounded-full bg-warn/12 px-1.5 text-[11px] font-medium text-warn">
-                        {t('provider.hosting')}
-                      </span>
-                    )}
+                    {event.provider.hosting && <Badge tone="warn">{t('provider.hosting')}</Badge>}
                   </span>
                 )}
                 {agent && <span>{[agent.browser, agent.os].filter(Boolean).join(' · ')}</span>}
@@ -101,7 +108,12 @@ export function ActivityList({ events, items }: { events: EventView[]; items: Li
                 {event.bytes !== null && event.type !== 'download_started' && (
                   <span className="tabular">{formatBytes(event.bytes, lang)}</span>
                 )}
-                {event.detail && <span className="font-mono">{event.detail}</span>}
+                {event.detail &&
+                  (event.type === 'refused' && event.detail in REFUSALS ? (
+                    <span>{t(REFUSALS[event.detail as keyof typeof REFUSALS])}</span>
+                  ) : (
+                    <span className="font-mono">{event.detail}</span>
+                  ))}
               </p>
             </div>
           </li>

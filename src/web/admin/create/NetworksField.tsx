@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useId } from 'react';
+import { useId, useState } from 'react';
 import { MAX_NETWORKS, parseNetwork } from '../../../shared/api.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
 
@@ -22,7 +22,9 @@ export function networksProblem(text: string): string[] | 'too_many' | null {
 export function NetworksField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const { t } = useI18n();
   const id = useId();
-  const problem = networksProblem(value);
+  // Judged once the field is left, so a range half typed is not shown as a mistake.
+  const [touched, setTouched] = useState(false);
+  const problem = touched ? networksProblem(value) : null;
   const error =
     problem === 'too_many'
       ? t('networks.tooMany', { max: MAX_NETWORKS })
@@ -44,6 +46,7 @@ export function NetworksField({ value, onChange }: { value: string; onChange: (v
         aria-invalid={!!error}
         aria-describedby={`${id}-hint`}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={() => setTouched(true)}
         className={clsx(
           'min-h-11 resize-y rounded-xl border bg-surface px-3 py-2.5 font-mono text-sm outline-none transition-colors placeholder:font-sans placeholder:text-muted/70 focus:border-accent-strong',
           error ? 'border-danger' : 'border-line',
@@ -51,8 +54,8 @@ export function NetworksField({ value, onChange }: { value: string; onChange: (v
       />
       <p
         id={`${id}-hint`}
-        className={clsx('text-sm', error ? 'text-danger' : 'text-muted')}
-        role={error ? 'alert' : undefined}
+        className={clsx('text-sm break-words', error ? 'text-danger' : 'text-muted')}
+        aria-live="polite"
       >
         {error ?? t('networks.hint')}
       </p>

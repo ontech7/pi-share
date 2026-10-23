@@ -13,13 +13,13 @@ export function formatDate(ms: number, lang: Lang): string {
   return new Date(ms).toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-export function formatDateTime(ms: number, lang: Lang): string {
+export function formatDateTime(ms: number, lang: Lang, { seconds = true } = {}): string {
   return new Date(ms).toLocaleString(lang, {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
+    ...(seconds && { second: '2-digit' }),
   });
 }
 

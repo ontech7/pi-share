@@ -51,6 +51,7 @@ function Loading() {
 
 function ProvidersCard() {
   const { t, lang } = useI18n();
+  const notify = useToast();
   const queryClient = useQueryClient();
   const set = (info: ProviderInfo) => queryClient.setQueryData(keys.providers, info);
   const providers = useQuery({
@@ -58,8 +59,9 @@ function ProvidersCard() {
     queryFn: api.providers,
     refetchInterval: (query) => (query.state.data?.updating ? 2_000 : false),
   });
-  const toggle = useMutation({ mutationFn: api.setProviders, onSuccess: set });
-  const refresh = useMutation({ mutationFn: api.refreshProviders, onSuccess: set });
+  const onError = () => notify(t('common.error'), 'error');
+  const toggle = useMutation({ mutationFn: api.setProviders, onSuccess: set, onError });
+  const refresh = useMutation({ mutationFn: api.refreshProviders, onSuccess: set, onError });
 
   const info = providers.data;
   if (!info) return <Loading />;
@@ -131,6 +133,7 @@ function NotificationsCard() {
   const data = notifications.data;
   if (!data) return <Loading />;
   const props = { data, save, saving: mutation.isPending };
+  const anyChannel = data.ntfy.enabled || data.telegram.enabled || data.email.enabled;
   return (
     <>
       <NtfyCard {...props} />
@@ -139,12 +142,15 @@ function NotificationsCard() {
       <Card className="divide-y divide-line">
         <div className="px-4 py-4 sm:px-5">
           <p className="text-[15px] font-medium">{t('notifications.kinds')}</p>
-          <p className="mt-1 text-sm text-muted">{t('notifications.hint')}</p>
+          <p className="mt-1 text-sm text-muted">
+            {anyChannel ? t('notifications.hint') : t('notifications.noChannel')}
+          </p>
         </div>
         {notificationKinds.map((kind) => (
           <SettingRow key={kind} label={t(KIND_LABELS[kind])}>
             <Switch
               checked={data.kinds[kind]}
+              disabled={!anyChannel}
               onChange={(on) => save({ kinds: { [kind]: on } })}
               label={t(KIND_LABELS[kind])}
             />
@@ -157,7 +163,7 @@ function NotificationsCard() {
 
 /**
  * One channel: a switch, and below it what the channel needs. Turning on a channel that is not set up yet
- * only opens its form; saving the form turns it on.
+ * only opens its form, with the switch still off; saving the form turns it on.
  */
 function Channel({
   channel,
@@ -195,17 +201,21 @@ function Channel({
     },
   });
   const title = t(`notifications.${channel}`);
+  const label = t('notifications.via', { channel: title });
 
   return (
     <Card className="divide-y divide-line">
-      <SettingRow label={title} hint={t(`notifications.${channel}Hint`)}>
+      <SettingRow
+        label={title}
+        hint={open && !enabled ? t('notifications.saveToEnable') : t(`notifications.${channel}Hint`)}
+      >
         <Switch
-          checked={enabled || open}
-          label={title}
+          checked={enabled}
+          label={label}
           onChange={(on) => {
             setOpen(on);
-            if (!on && enabled) save({ [channel]: { enabled: false } });
             if (on && ready) save({ [channel]: { enabled: true } });
+            if (!on && enabled) save({ [channel]: { enabled: false } });
           }}
         />
       </SettingRow>
@@ -235,7 +245,7 @@ function Channel({
             </Button>
           </div>
           {status.lastError && (
-            <p className="flex items-start gap-1.5 text-sm break-words text-danger" role="alert">
+            <p className="flex items-start gap-1.5 text-sm break-words text-danger" role="status">
               <CircleAlert className="mt-0.5 size-4 shrink-0" />
               {t('notifications.lastError', { error: status.lastError })}
             </p>
@@ -455,7 +465,7 @@ function EmailCard(props: ChannelProps) {
               aria-pressed={form.security === option.value}
               onClick={() => edit({ security: option.value, port: String(option.port) })}
               className={clsx(
-                'press h-9 rounded-lg text-sm font-medium transition-colors',
+                'press h-10 rounded-lg text-sm font-medium transition-colors',
                 form.security === option.value ? 'bg-surface text-fg shadow-card' : 'text-muted hover:text-fg',
               )}
             >

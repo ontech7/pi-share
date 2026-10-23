@@ -228,8 +228,11 @@ ticket valid, is the file still the same) is taken again by the broker on each r
   downloading for the first time hold their place until they finish.
 - Allowed networks trust the client address the tunnel puts in `CLIENT_IP_HEADER`. Cloudflare sets
   `cf-connecting-ip` itself, so a visitor cannot choose it; behind a proxy that passes the header through from the
-  client, the list would be as easy to fake as the header. An address that is missing or not an address never
-  passes a list.
+  client, the list would be as easy to fake as the header. When the header is configured but missing, the visit
+  has no address (not the proxy's) and never passes a list; set `CLIENT_IP_HEADER` empty only when nothing sits in
+  front of the edge.
+- The provider table takes a few tens of MB in the admin process; on a board with 1 GB or less, consider
+  `PROVIDER_LOOKUP=false`. A downloaded table is capped in size, rows and line length before it is used.
 - Notifications, the provider table and update checks are the only things the admin sends out, and only to the
   servers you configure (or iptoasn.com and GitHub). The edge stays without network.
 - A file counts as unchanged while its size and modification time are the same. Someone who can write to the disk

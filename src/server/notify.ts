@@ -18,8 +18,13 @@ import { type NewEvent, ShareError } from './shares.ts';
 
 /** The same visitor doing the same thing on the same link is told once in this window. */
 const QUIET = 15 * 60 * 1000;
-/** Across all links, so a storm of requests cannot turn into a storm of notifications. */
-const BURST = { max: 20, window: 10 * 60 * 1000 };
+/**
+ * How many notifications fit in a window: per link, so one busy (or abused) link cannot use up the others'
+ * share, and overall. Warnings have their own budget, so a flood of opens cannot hide wrong passwords; a lock
+ * happens once per lock and always goes out.
+ */
+const WINDOW = 10 * 60 * 1000;
+const BUDGET = { perLink: 5, overall: 30, warnings: 30 };
 const TIMEOUT = 15_000;
 
 type Email = NotificationSettings['email'];
@@ -102,7 +107,7 @@ function complete(stored: Stored, channel: NotificationChannel): boolean {
 export class Notifier {
   private readonly deps: NotifierDeps;
   private readonly lastSent = new Map<string, number>();
-  private recent: number[] = [];
+  private sentIn = new Map<string, number[]>();
   private readonly status: Record<NotificationChannel, ChannelStatus> = {
     ntfy: { lastSentAt: null, lastError: null },
     telegram: { lastSentAt: null, lastError: null },
@@ -204,17 +209,31 @@ export class Notifier {
       const who = event.type === 'preview' ? '' : (event.visitor ?? event.ip ?? '');
       const key = `${link.id} ${event.type} ${event.detail ?? ''} ${who}`;
       const now = this.now;
-      if (event.type !== 'locked' && now - (this.lastSent.get(key) ?? 0) < QUIET) return;
-      this.recent = this.recent.filter((at) => now - at < BURST.window);
-      if (this.recent.length >= BURST.max) return;
-      this.recent.push(now);
+      if (event.type !== 'locked') {
+        if (now - (this.lastSent.get(key) ?? 0) < QUIET) return;
+        const budgets: [string, number][] =
+          kind === 'warnings'
+            ? [['warnings', BUDGET.warnings]]
+            : [
+                [`link ${link.id}`, BUDGET.perLink],
+                ['overall', BUDGET.overall],
+              ];
+        for (const [budget] of budgets) this.sentIn.set(budget, this.spent(budget, now));
+        if (budgets.some(([budget, max]) => (this.sentIn.get(budget)?.length ?? 0) >= max)) return;
+        for (const [budget] of budgets) this.sentIn.get(budget)?.push(now);
+      }
       this.lastSent.set(key, now);
       for (const [stale, at] of this.lastSent) if (now - at >= QUIET) this.lastSent.delete(stale);
+      for (const budget of this.sentIn.keys()) if (this.spent(budget, now).length === 0) this.sentIn.delete(budget);
       const message = this.compose(stored.lang, link.label, kind, event);
       for (const channel of channels) void this.send(stored, channel, message).catch(() => undefined);
     } catch {
       // a notification is never worth failing a visit for
     }
+  }
+
+  private spent(budget: string, now: number): number[] {
+    return (this.sentIn.get(budget) ?? []).filter((at) => now - at < WINDOW);
   }
 
   async test(channel: NotificationChannel): Promise<NotificationSettings> {
@@ -282,6 +301,8 @@ export class Notifier {
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT),
+      // A redirect would carry the message, and maybe the token, to a server nobody configured.
+      redirect: 'error',
     });
     const text = (await response.text().catch(() => '')).slice(0, 2_000);
     return { ok: response.ok, status: response.status, text };

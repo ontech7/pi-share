@@ -10,6 +10,10 @@ const MAX_DOWNLOAD = 32 * 1024 * 1024;
 const MAX_UNPACKED = 256 * 1024 * 1024;
 const MIN_RANGES = 1_000;
 const MAX_NAME = 100;
+/** The real table has about 600,000 ranges and 80,000 networks. */
+const MAX_ROWS = 2_000_000;
+const MAX_NAMES = 200_000;
+const MAX_LINE = 1_024;
 
 /**
  * Networks of clouds, hosting companies and the VPN services that rent from them: a visit from one of these
@@ -44,9 +48,59 @@ function displayName(description: string): string {
   return name.slice(0, MAX_NAME);
 }
 
-type Ranges<T> = { start: T[]; end: T[]; asn: number[] };
-/** Sorted by start, in typed arrays: a full table is about 580,000 ranges and has to fit on a Pi. */
+/** Sorted by start, in typed arrays: a full table is about 600,000 ranges and has to fit on a Pi. */
 type Columns<T> = { start: ArrayLike<T>; end: ArrayLike<T>; asn: Uint32Array };
+
+/** Rows go straight into typed arrays that double when full, so a table costs a few bytes per range. */
+class Column<T extends number | bigint> {
+  start: Uint32Array | BigUint64Array;
+  end: Uint32Array | BigUint64Array;
+  asn = new Uint32Array(1024);
+  length = 0;
+  private readonly make: (size: number) => Uint32Array | BigUint64Array;
+
+  constructor(make: (size: number) => Uint32Array | BigUint64Array) {
+    this.make = make;
+    this.start = make(1024);
+    this.end = make(1024);
+  }
+
+  push(start: T, end: T, asn: number) {
+    if (this.length === this.asn.length) {
+      const grow = <A extends Uint32Array | BigUint64Array>(old: A, next: A) => {
+        next.set(old as never);
+        return next;
+      };
+      this.start = grow(this.start, this.make(this.length * 2));
+      this.end = grow(this.end, this.make(this.length * 2));
+      this.asn = grow(this.asn, new Uint32Array(this.length * 2));
+    }
+    this.start[this.length] = start as never;
+    this.end[this.length] = end as never;
+    this.asn[this.length] = asn;
+    this.length++;
+  }
+
+  sorted(): Columns<T> {
+    const start = this.start as unknown as ArrayLike<T>;
+    const order = Uint32Array.from({ length: this.length }, (_, index) => index).sort((a, b) => {
+      const left = start[a] as T;
+      const right = start[b] as T;
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+    const pick = <A extends Uint32Array | BigUint64Array>(source: A, target: A) => {
+      order.forEach((from, to) => {
+        target[to] = source[from] as never;
+      });
+      return target;
+    };
+    return {
+      start: pick(this.start, this.make(this.length)) as unknown as ArrayLike<T>,
+      end: pick(this.end, this.make(this.length)) as unknown as ArrayLike<T>,
+      asn: pick(this.asn, new Uint32Array(this.length)),
+    };
+  }
+}
 
 function find<T extends number | bigint>(ranges: Columns<T>, value: T): number | null {
   let low = 0;
@@ -59,28 +113,14 @@ function find<T extends number | bigint>(ranges: Columns<T>, value: T): number |
   return high >= 0 && value <= (ranges.end[high] as T) ? (ranges.asn[high] as number) : null;
 }
 
-function columns<T extends number | bigint>(ranges: Ranges<T>, typed: (values: T[]) => ArrayLike<T>): Columns<T> {
-  const order = ranges.start.map((_, index) => index);
-  order.sort((a, b) => {
-    const left = ranges.start[a] as T;
-    const right = ranges.start[b] as T;
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-  return {
-    start: typed(order.map((index) => ranges.start[index] as T)),
-    end: typed(order.map((index) => ranges.end[index] as T)),
-    asn: Uint32Array.from(order, (index) => ranges.asn[index] as number),
-  };
-}
-
 export class ProviderTable {
   private readonly v4: Columns<number>;
   private readonly v6: Columns<bigint>;
   private readonly names: Map<number, string>;
 
-  constructor(v4: Ranges<number>, v6: Ranges<bigint>, names: Map<number, string>) {
-    this.v4 = columns(v4, (values) => Uint32Array.from(values));
-    this.v6 = columns(v6, (values) => BigUint64Array.from(values));
+  constructor(v4: Column<number>, v6: Column<bigint>, names: Map<number, string>) {
+    this.v4 = v4.sorted();
+    this.v6 = v6.sorted();
     this.names = names;
   }
 
@@ -98,30 +138,29 @@ export class ProviderTable {
   }
 }
 
-/** Reads iptoasn's "start end asn country description" lines; anything malformed is skipped, never trusted. */
+/**
+ * Reads iptoasn's "start end asn country description" lines; anything malformed is skipped, never trusted.
+ * Rows, names and line length are capped, so a hostile table cannot take the memory the broker shares.
+ */
 export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
-  const v4: Ranges<number> = { start: [], end: [], asn: [] };
-  const v6: Ranges<bigint> = { start: [], end: [], asn: [] };
+  const v4 = new Column<number>((size) => new Uint32Array(size));
+  const v6 = new Column<bigint>((size) => new BigUint64Array(size));
   const names = new Map<number, string>();
   const add = (line: string) => {
     const [first = '', last = '', asnText = '', , description = ''] = line.split('\t');
     const asn = Number(asnText);
     if (!Number.isInteger(asn) || asn <= 0 || asn > 4_294_967_295) return;
+    if (v4.length + v6.length >= MAX_ROWS) throw new Error('provider data has too many ranges');
     const start4 = ipv4Number(first);
     const end4 = start4 === null ? null : ipv4Number(last);
-    if (start4 !== null && end4 !== null && start4 <= end4) {
-      v4.start.push(start4);
-      v4.end.push(end4);
-      v4.asn.push(asn);
-    } else {
+    if (start4 !== null && end4 !== null && start4 <= end4) v4.push(start4, end4, asn);
+    else {
       const start6 = ipv6Prefix(first);
       const end6 = start6 === null ? null : ipv6Prefix(last);
       if (start6 === null || end6 === null || start6 > end6) return;
-      v6.start.push(start6);
-      v6.end.push(end6);
-      v6.asn.push(asn);
+      v6.push(start6, end6, asn);
     }
-    if (!names.has(asn) && description) names.set(asn, displayName(description));
+    if (!names.has(asn) && description && names.size < MAX_NAMES) names.set(asn, displayName(description));
   };
 
   const gunzip = zlib.createGunzip();
@@ -134,6 +173,7 @@ export async function parseTable(gzipped: Readable): Promise<ProviderTable> {
     if (unpacked > MAX_UNPACKED) throw new Error('provider data too large');
     const lines = (rest + chunk).split('\n');
     rest = lines.pop() ?? '';
+    if (rest.length > MAX_LINE) throw new Error('provider data has a line too long');
     for (const line of lines) add(line);
   }
   if (rest) add(rest);

@@ -43,6 +43,8 @@ describe('notification settings', () => {
     for (const body of [
       { ntfy: { server: 'file:///etc/passwd' } },
       { ntfy: { topic: 'has spaces' } },
+      { ntfy: { server: 'https://user:secret@ntfy.example.com' } },
+      { ntfy: { server: 'https://ntfy.example.com/?token=x' } },
       { telegram: { token: 'not-a-token' } },
       { telegram: { chatId: 'someone' } },
       { email: { host: 'smtp.example.com\r\nRCPT TO:<x@y.z>' } },
@@ -196,6 +198,20 @@ describe('notifications about links', () => {
     await stack.open(await stack.visit(link.id, '198.51.100.20'), link);
     await settle();
     expect(stack.sent).toHaveLength(0);
+  });
+
+  it('keep warnings and other links going when one link floods the budget', async () => {
+    await configure({ ntfy: { enabled: true } });
+    const busy = await create({ label: 'Busy' });
+    for (let i = 0; i < 12; i++) await stack.open(await stack.visit(busy.id, `198.51.100.${100 + i}`), busy);
+    const quiet = await create({ label: 'Quiet', password: 'right-pass' });
+    await stack.open(await stack.visit(quiet.id, '198.51.100.200'), quiet);
+    await stack.unlock(await stack.visit(quiet.id, '198.51.100.201'), quiet, 'wrong-pass');
+    await settle();
+    const titles = stack.sent.map((sent) => (sent.body as { title: string }).title);
+    expect(titles.filter((title) => title === 'Busy')).toHaveLength(5);
+    expect(messages().filter((m) => m.message.includes('Wrong password'))).toHaveLength(1);
+    expect(titles).toContain('Quiet');
   });
 
   it('never let a failing channel get in the way of a visit', async () => {

@@ -246,7 +246,14 @@ export const notificationsBody = z.object({
   ntfy: z
     .object({
       enabled: z.boolean(),
-      server: z.url({ protocol: /^https?$/ }).max(200),
+      // Origin and path only: credentials in the address would be stored and shown in clear.
+      server: z
+        .url({ protocol: /^https?$/ })
+        .max(200)
+        .refine((value) => {
+          const url = new URL(value);
+          return !url.username && !url.password && !url.search && !url.hash;
+        }, 'origin_and_path_only'),
       topic: z.string().regex(/^[\w-]{1,64}$/),
       token: secret(200),
     })

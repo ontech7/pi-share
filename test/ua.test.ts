@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { previewApp } from '../src/web/lib/ua.ts';
+import { parseAgent, previewApp } from '../src/web/lib/ua.ts';
 
 describe('chat previews', () => {
   it('name the app behind the preview, iMessage and Teams included', () => {
@@ -10,6 +10,13 @@ describe('chat previews', () => {
     expect(previewApp('Mozilla/5.0 (Windows NT 6.1; WOW64) SkypeUriPreview Preview/0.5')).toBe('Teams');
     expect(previewApp('Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)')).toBe('Slack');
     expect(previewApp('curl/8.0')).toBeNull();
+  });
+
+  it('keep only a short plain name for bots, since it ends up in notifications', () => {
+    expect(parseAgent('Discordbot/2.0')?.browser).toBe('Discordbot');
+    expect(parseAgent('visit-evil.example.com/please curl')?.browser).toBe('visit-evil.example.com');
+    expect(parseAgent(`${'x'.repeat(60)} curl`)?.browser).toBe('Bot');
+    expect(parseAgent('Click:http://evil curl')?.browser).toBe('Bot');
     expect(previewApp(null)).toBeNull();
   });
 });

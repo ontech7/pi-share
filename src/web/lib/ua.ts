@@ -23,8 +23,9 @@ const BOTS = /bot|crawl|spider|preview|curl|wget|python|go-http/i;
 export function parseAgent(userAgent: string | null): Agent | null {
   if (!userAgent) return null;
   if (BOTS.test(userAgent)) {
-    const name = /([\w-]*bot[\w-]*)/i.exec(userAgent)?.[1] ?? userAgent.split(/[ /]/)[0] ?? 'Bot';
-    return { browser: name, os: '', mobile: false };
+    // Whatever the visitor sends shows up in notifications: only a short plain name is kept.
+    const name = /([\w-]*bot[\w-]*)/i.exec(userAgent)?.[1] ?? userAgent.split(/[ /]/)[0] ?? '';
+    return { browser: /^[\w.-]{1,40}$/.test(name) ? name : 'Bot', os: '', mobile: false };
   }
   let browser = 'Browser';
   for (const [pattern, name] of BROWSERS) {

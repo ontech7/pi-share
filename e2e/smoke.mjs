@@ -48,6 +48,8 @@ const env = {
   // Offline and deterministic by default; E2E_UPDATES=1 checks the real GitHub releases.
   UPDATE_CHECK: process.env.E2E_UPDATES ? 'true' : 'false',
   PROVIDER_LOOKUP: 'false',
+  // No tunnel in front: the edge takes the address of the connection itself.
+  CLIENT_IP_HEADER: '',
 };
 
 const processes = [];

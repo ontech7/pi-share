@@ -366,6 +366,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const { id, downloadId } = request.params;
       const visit = visitOf(request.headers);
       if (!validTicket(id, visit, request.headers[TICKET_HEADER])) return reply.code(403).send({ error: 'ticket' });
+      const link = shares.find(id);
+      if (!link || !shares.allowsNetwork(link, visit.ip)) return reply.code(404).send({ error: 'unknown_download' });
       if (!shares.startedBy(id, downloadId, visit.visitor) || shares.hasResult(id, downloadId)) {
         return reply.code(404).send({ error: 'unknown_download' });
       }

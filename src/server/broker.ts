@@ -140,13 +140,15 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     return { ok: true as const, servable: found.value, visitor: visit.visitor };
   };
 
-  /** A ticket is only good for its link, its visitor, the current password and a network the link allows. */
-  const checkTicket = (id: string, visit: Visit, header: unknown): 'ok' | 'invalid' | 'network' => {
+  /**
+   * The link, when the ticket is good for it, its visitor and the current password. The network is left to
+   * the caller, which checks it again on every request.
+   */
+  const checkTicket = (id: string, visit: Visit, header: unknown) => {
     const ticket = vault.readTicket<Ticket>(typeof header === 'string' ? header : undefined);
     const link = shares.find(id);
-    if (!ticket || !link || ticket.l !== id || !visit.visitor || ticket.v !== visit.visitor) return 'invalid';
-    if (ticket.g !== shares.passwordGeneration(link)) return 'invalid';
-    return shares.allowsNetwork(link, visit.ip) ? 'ok' : 'network';
+    if (!ticket || !link || ticket.l !== id || !visit.visitor || ticket.v !== visit.visitor) return null;
+    return ticket.g === shares.passwordGeneration(link) ? link : null;
   };
 
   // The switch applies at once; the count of open links never looks at the disk, so any visitor may ask.
@@ -217,8 +219,9 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       const { id, part } = request.params;
       const visit = visitOf(request.headers);
       const visitor = visit.visitor;
-      const ticket = checkTicket(id, visit, request.headers[TICKET_HEADER]);
-      if (!visitor || ticket === 'invalid') return reply.code(403).send({ error: 'ticket' });
+      if (!visitor || !checkTicket(id, visit, request.headers[TICKET_HEADER])) {
+        return reply.code(403).send({ error: 'ticket' });
+      }
 
       // A ticket does not carry over to another network, such as after leaving the VPN.
       const found = shares.servable(id, visit);
@@ -358,8 +361,8 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
     async (request, reply) => {
       const { id, downloadId } = request.params;
       const visit = visitOf(request.headers);
-      if (checkTicket(id, visit, request.headers[TICKET_HEADER]) !== 'ok')
-        return reply.code(403).send({ error: 'ticket' });
+      const link = checkTicket(id, visit, request.headers[TICKET_HEADER]);
+      if (!link || !shares.allowsNetwork(link, visit.ip)) return reply.code(403).send({ error: 'ticket' });
       if (!shares.startedBy(id, downloadId, visit.visitor) || shares.hasResult(id, downloadId)) {
         return reply.code(404).send({ error: 'unknown_download' });
       }

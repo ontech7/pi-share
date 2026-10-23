@@ -270,15 +270,17 @@ function PastedInChats({ link }: { link: LinkDetail }) {
   if (previews.length === 0) return null;
   const known = [...new Set(previews.map((event) => previewApp(event.userAgent) as string))];
   const apps = new Intl.ListFormat(lang, { type: 'conjunction' }).format(known);
-  const last = Math.max(...previews.map((event) => event.at));
+  // Non-breaking spaces keep the date and time on one line when the title wraps.
+  const when = formatDateTime(Math.max(...previews.map((event) => event.at)), lang, { seconds: false }).replace(
+    / /g,
+    '\u00a0',
+  );
   return (
     <Card className="flex gap-3 border-warn/40 p-4">
       <MessageSquareWarning className="mt-0.5 size-5 shrink-0 text-warn" />
       <div className="flex min-w-0 flex-col gap-1">
-        <p className="text-[15px] font-medium">
-          {t('detail.pastedTitle', { apps, when: formatDateTime(last, lang, { seconds: false }) })}
-        </p>
-        <p className="text-sm text-muted">
+        <p className="text-[15px] font-medium">{t('detail.pastedTitle', { apps, when })}</p>
+        <p className="max-w-prose text-sm text-muted">
           {t('detail.pastedBody')} {!link.hasPassword && t('detail.pastedNoPassword')}
         </p>
       </div>

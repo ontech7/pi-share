@@ -49,12 +49,28 @@ describe('provider table', () => {
 
   it('refuses a table built to exhaust memory or CPU', async () => {
     const rows = zlib.gzipSync('1::\t1::\t1\n'.repeat(2_000_001));
-    await expect(parseTable(Readable.from([rows]))).rejects.toMatchObject({
-      code: 'invalid',
-      detail: 'too many ranges',
-    });
-    const line = zlib.gzipSync('x'.repeat(100_000));
-    await expect(parseTable(Readable.from([line]))).rejects.toMatchObject({ code: 'invalid', detail: 'line too long' });
+    await expect(parseTable(Readable.from([rows]))).rejects.toMatchObject({ code: 'invalid', detail: null });
+    // Refused halfway, the source is closed too: a file read from disk does not stay open.
+    const line = Readable.from([zlib.gzipSync('x'.repeat(100_000))]);
+    await expect(parseTable(line)).rejects.toMatchObject({ code: 'invalid', detail: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(line.destroyed).toBe(true);
+  });
+
+  it('reads a table that is already in order, as iptoasn publishes it', async () => {
+    const rows = [
+      '1.0.0.0\t1.0.0.255\t13335\tUS\tCLOUDFLARENET',
+      '2.32.0.0\t2.47.255.255\t30722\tIT\tVODAFONE-IT-ASN Vodafone Italia S.p.A.',
+      '35.196.0.0\t35.199.255.255\t396982\tUS\tGOOGLE-CLOUD-PLATFORM',
+      '2001:4bb8::\t2001:4bbf:ffff:ffff:ffff:ffff:ffff:ffff\t8447\tAT\tA1TELEKOM-AT A1 Telekom Austria AG',
+    ];
+    const parsed = await parseTable(Readable.from([zlib.gzipSync(rows.join('\n'))]));
+    expect(parsed.size).toBe(4);
+    expect(parsed.lookup('1.0.0.1')?.asn).toBe(13335);
+    expect(parsed.lookup('2.34.40.138')?.asn).toBe(30722);
+    expect(parsed.lookup('35.199.0.1')?.asn).toBe(396982);
+    expect(parsed.lookup('2001:4bb8::1')?.asn).toBe(8447);
+    expect(parsed.lookup('3.0.0.1')).toBeNull();
   });
 
   it('rejects data that is not gzip', async () => {
@@ -112,7 +128,7 @@ describe('a bad provider download', () => {
     await stack.providers.start();
     const info = stack.providers.info();
     expect(info.ranges).toBe(0);
-    expect(info.error).toEqual({ code: 'invalid', detail: 'too few ranges' });
+    expect(info.error).toEqual({ code: 'invalid', detail: null });
     expect(fs.existsSync(`${stack.root}/data/ip2asn.tsv.gz`)).toBe(false);
   });
 });
@@ -140,7 +156,13 @@ describe('provider table lifecycle', () => {
     expect(stack.providers.info()).toMatchObject({ enabled: false, ranges: 0 });
     await stack.providers.start();
     expect(stack.providers.info().ranges).toBe(0);
-    stack.providers.setEnabled(true);
+    const before = fs.statSync(`${stack.root}/data/ip2asn.tsv.gz`).mtimeMs;
+    const refused = (await stack.adminCall('POST', '/api/providers/refresh')).body as ProviderInfo;
+    expect(refused).toMatchObject({ enabled: false, updating: false });
+    expect(fs.statSync(`${stack.root}/data/ip2asn.tsv.gz`).mtimeMs).toBe(before);
+    // The page polls only while the state says it is updating: it has to from the answer that turns it on.
+    const on = (await stack.adminCall('PATCH', '/api/providers', { enabled: true })).body as ProviderInfo;
+    expect(on).toMatchObject({ enabled: true, updating: true });
     await stack.providers.start();
     expect(stack.providers.lookup('2001:4bb8::1')?.asn).toBe(8447);
   });

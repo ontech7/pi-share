@@ -125,7 +125,12 @@ export class Notifier {
   }
 
   private secret(sealed: string | null, channel: NotificationChannel): string {
-    return sealed ? this.deps.vault.open(sealed, `notifications/${channel}`).toString() : '';
+    if (!sealed) return '';
+    try {
+      return this.deps.vault.open(sealed, `notifications/${channel}`).toString();
+    } catch {
+      throw new RemoteFailure('unreadable');
+    }
   }
 
   private seal(value: string | null | undefined, channel: NotificationChannel, current: string | null) {
@@ -291,8 +296,9 @@ export class Notifier {
 
   private async send(stored: Stored, channel: NotificationChannel, message: Message) {
     const secret = channel === 'email' ? stored.email.sealedPassword : stored[channel].sealedToken;
-    const plain = this.secret(secret, channel);
+    let plain = '';
     try {
+      plain = this.secret(secret, channel);
       if (channel === 'ntfy') await this.ntfy(stored.ntfy, plain, message);
       else if (channel === 'telegram') await this.telegram(stored.telegram.chatId, plain, message);
       else await this.email(stored.email, plain, message);

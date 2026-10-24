@@ -2,9 +2,12 @@ import '../styles.css';
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { applyTheme, getTheme } from '../lib/theme.ts';
 import { Toaster } from '../ui/Toaster.tsx';
 import { App } from './App.tsx';
 import { ApiError, keys } from './api.ts';
+
+applyTheme(getTheme());
 
 const onError = (error: Error) => {
   if (error instanceof ApiError && error.status === 401) queryClient.invalidateQueries({ queryKey: keys.session });

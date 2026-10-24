@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-24
+
+### Added
+
+- Theme switch in **Settings → Appearance**: System (the default), Light or Dark. The choice is kept in the browser,
+  so each device can have its own.
+
 ## [0.5.0] - 2026-10-23
 
 ### Added
@@ -92,7 +99,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Password, expiry, download limit and activity log per link.
 - Service switch; admin on the LAN, network-less edge behind a tunnel.
 
-[Unreleased]: https://github.com/ontech7/pi-share/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ontech7/pi-share/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/ontech7/pi-share/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ontech7/pi-share/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ontech7/pi-share/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ontech7/pi-share/compare/v0.4.0...v0.4.1

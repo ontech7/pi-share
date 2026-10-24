@@ -22,8 +22,9 @@
   --shadow: 0 1px 2px rgb(12 15 21 / 0.06), 0 8px 24px -12px rgb(12 15 21 / 0.18);
 }
 
+/* the dark tokens are listed twice (system and pinned): keep both blocks in sync */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0a0b0f;
     --surface: #121419;
     --surface-2: #1a1d25;
@@ -37,6 +38,26 @@
     --ring: rgb(200 244 61 / 0.35);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -16px rgb(0 0 0 / 0.7);
   }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0b0f;
+  --surface: #121419;
+  --surface-2: #1a1d25;
+  --border: #262a34;
+  --text: #eef0f5;
+  --muted: #8c93a5;
+  --accent-strong: #c8f43d;
+  --ok: #3ddc97;
+  --warn: #ffb547;
+  --danger: #ff6464;
+  --ring: rgb(200 244 61 / 0.35);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -16px rgb(0 0 0 / 0.7);
 }
 
 @theme inline {

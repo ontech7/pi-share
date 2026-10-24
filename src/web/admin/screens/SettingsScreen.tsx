@@ -8,6 +8,7 @@ import {
   KeyRound,
   Link2,
   type LucideIcon,
+  Palette,
   Radio,
   UserRound,
 } from 'lucide-react';
@@ -18,6 +19,7 @@ import { useI18n } from '../../lib/i18n-context.tsx';
 import { Card } from '../../ui/Card.tsx';
 import { AccountSection } from '../settings/AccountSection.tsx';
 import { ActivitySection } from '../settings/ActivitySection.tsx';
+import { AppearanceSection } from '../settings/AppearanceSection.tsx';
 import { IntegrationsSection } from '../settings/IntegrationsSection.tsx';
 import { NewLinksSection } from '../settings/NewLinksSection.tsx';
 import { NotificationsSection } from '../settings/NotificationsSection.tsx';
@@ -74,6 +76,14 @@ const SECTIONS: Section[] = [
     hint: 'updates.hint',
     intro: 'updates.intro',
     body: UpdatesSection,
+  },
+  {
+    id: 'appearance',
+    icon: Palette,
+    title: 'settings.appearance',
+    hint: 'settings.appearanceHint',
+    intro: 'settings.appearanceIntro',
+    body: AppearanceSection,
   },
   { id: 'account', icon: UserRound, title: 'settings.account', hint: 'settings.accountHint', body: AccountSection },
 ];

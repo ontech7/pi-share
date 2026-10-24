@@ -373,6 +373,28 @@ try {
   const saved = await panel.eval(`fetch('/api/preferences').then((r) => r.json())`);
   assert(saved.onChange === 'follow', 'settings page saves the defaults for new links');
 
+  await panel.click('Appearance');
+  await panel.text('Saved in this browser only');
+  const theme = () =>
+    panel.eval(
+      `({ attr: document.documentElement.dataset.theme ?? null, bg: getComputedStyle(document.body).backgroundColor })`,
+    );
+  const pick = (name) =>
+    panel.eval(
+      `[...document.querySelectorAll('button[aria-pressed]')].find((b) => b.textContent === '${name}').click()`,
+    );
+  await pick('Light');
+  const light = await theme();
+  assert(
+    light.attr === 'light' && light.bg === 'rgb(245, 246, 248)',
+    `the light theme wins over a dark system ${JSON.stringify(light)}`,
+  );
+  await panel.shot('10-appearance-light');
+  await pick('System');
+  const system = await theme();
+  assert(system.attr === null && system.bg === 'rgb(10, 11, 15)', 'system goes back to following the device');
+  await panel.shot('10-appearance-system-mobile', { width: 390, height: 844, mobile: true });
+
   await panel.click('Activity');
   await panel.text('Show the provider');
   await panel.shot('13-activity');

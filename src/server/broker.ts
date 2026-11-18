@@ -37,6 +37,8 @@ const PREVIEW_INTERVAL = 10_000;
 const VISIT_LIMITS = { ip: 64, country: 8, userAgent: 512, language: 128, visitor: 64 } as const;
 
 type Ticket = { l: string; v: string; g: string; exp: number };
+/** A download in flight: who asked, under which password, and how to end it from outside. */
+type Flight = { visit: Visit; generation: string; stop: (reason: string) => void };
 
 const linkParams = z.object({ id: z.string().regex(/^[\w-]{10,64}$/) });
 const proof = z.string().regex(/^[\w-]{43}$/);
@@ -83,6 +85,38 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   const inFlight = new Map<string, number>();
   const lastPreview = new Map<string, number>();
   let activeLinks = { value: 0, at: 0, revision: -1 };
+  /** Downloads in flight per link, so a change to the link reaches the ones already streaming. */
+  const flights = new Map<string, Set<Flight>>();
+
+  /** Why a download in flight must stop now, or null while the owner still lets it go on. */
+  const revoked = (id: string, flight: Flight): string | null => {
+    const link = shares.find(id);
+    if (!link) return 'deleted';
+    if (shares.passwordGeneration(link) !== flight.generation) return 'password_changed';
+    const reason = shares.revocation(id, flight.visit);
+    if (reason) return reason === 'not_found' ? 'deleted' : reason;
+    return isOnline(shares, settings) ? null : 'service_off';
+  };
+
+  const recheck = (id: string) => {
+    for (const flight of [...(flights.get(id) ?? [])]) {
+      const reason = revoked(id, flight);
+      if (reason) flight.stop(reason);
+    }
+  };
+  const stopListening = shares.onLinkChange(recheck);
+
+  app.addHook('preClose', async () => {
+    stopListening();
+    for (const set of flights.values()) for (const flight of [...set]) flight.stop('shutdown');
+  });
+
+  // Never echo internal errors (SQLite, file system) to the visitor: the edge relays error bodies as they are.
+  app.setErrorHandler((error: { statusCode?: number }, request, reply) => {
+    if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) return reply.send(error);
+    request.log.error(error);
+    return reply.code(500).send({ error: 'internal' });
+  });
 
   const adjust = (map: Map<string, number>, key: string, delta: number) => {
     const next = (map.get(key) ?? 0) + delta;
@@ -204,7 +238,9 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         const locked = shares.failPassword(link, visit);
         return reply.code(locked ? 404 : 403).send({ error: locked ? 'unavailable' : 'wrong_password' });
       }
-      if (shares.find(link.id)?.lockedAt) return unavailable(reply);
+      // The link may have been locked or deleted during the slow password check.
+      const current = shares.find(link.id);
+      if (!current || current.lockedAt) return unavailable(reply);
       shares.unlocked(link, visit);
       return grant(allowed.servable, allowed.visitor);
     },
@@ -213,15 +249,16 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   app.get(
     '/links/:id/files/:part',
     {
+      // A HEAD would stream (and count) the whole download only to drop the body.
+      exposeHeadRoute: false,
       schema: { params: linkParams.extend({ part: z.union([z.literal('all'), z.string().regex(/^[0-9a-f]{16}$/)]) }) },
     },
     async (request, reply) => {
       const { id, part } = request.params;
       const visit = visitOf(request.headers);
       const visitor = visit.visitor;
-      if (!visitor || !checkTicket(id, visit, request.headers[TICKET_HEADER])) {
-        return reply.code(403).send({ error: 'ticket' });
-      }
+      const ticketed = checkTicket(id, visit, request.headers[TICKET_HEADER]);
+      if (!visitor || !ticketed) return reply.code(403).send({ error: 'ticket' });
 
       // A ticket does not carry over to another network, such as after leaving the VPN.
       const found = shares.servable(id, visit);
@@ -268,7 +305,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       try {
         if (single) {
           plainSize = single.size;
-          source = exactFile(opener(single)(), single.size, abort.signal);
+          source = exactFile(opener(single)(), single, abort.signal);
         } else {
           const archive = selected.map((entry) => ({
             name: entry.path,
@@ -286,11 +323,35 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
       }
 
       const downloadId = randomId(9);
+      let started: boolean;
+      try {
+        started = shares.record(id, { ...visit, ...target, type: 'download_started', downloadId, bytes: plainSize });
+      } catch (error) {
+        abort.abort();
+        source.destroy();
+        throw error;
+      }
+      if (!started) {
+        abort.abort();
+        source.destroy();
+        return unavailable(reply);
+      }
+
       let sent = 0;
       let delivered = 0;
       let settled = false;
       let sentAtLastCheck = -1;
+      const flight: Flight = {
+        visit,
+        generation: shares.passwordGeneration(ticketed),
+        stop: (reason) => {
+          abort.abort();
+          reply.raw.destroy();
+          settle('download_aborted', reason);
+        },
+      };
 
+      // Runs from stream and timer callbacks, outside any request: a throw here would take the whole process down.
       const settle = (type: 'download_finished' | 'download_aborted', detail?: string) => {
         if (settled) return;
         settled = true;
@@ -298,32 +359,45 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
         adjust(perLink, id, -1);
         adjust(perVisitor, visitor, -1);
         adjust(inFlight, `${id} ${visitor}`, -1);
+        const set = flights.get(id);
+        set?.delete(flight);
+        if (set?.size === 0) flights.delete(id);
         const finished = type === 'download_finished';
-        shares.record(id, {
-          ...visit,
-          ...target,
-          type,
-          downloadId,
-          bytes: finished ? sent : plainDelivered(delivered, plainSize),
-          detail,
-          counted: finished || downloadCounts(delivered, plainSize),
-        });
+        try {
+          shares.record(id, {
+            ...visit,
+            ...target,
+            type,
+            downloadId,
+            bytes: finished ? sent : plainDelivered(delivered, plainSize),
+            detail,
+            counted: finished || downloadCounts(delivered, plainSize),
+          });
+        } catch (error) {
+          app.log.error({ err: error, link: id, downloadId }, 'could not record the end of a download');
+        }
       };
 
-      // A client that stops reading would otherwise hold a download slot forever.
+      // A client that stops reading would otherwise hold a download slot forever; the link is checked again too,
+      // for what changes without an edit: expiry, the service switch, the files on disk.
       const watchdog = setInterval(() => {
-        if (sent === sentAtLastCheck) {
-          abort.abort();
-          reply.raw.destroy();
-          settle('download_aborted', 'idle');
+        try {
+          if (sent === sentAtLastCheck) return flight.stop('idle');
+          sentAtLastCheck = sent;
+          const reason = revoked(id, flight);
+          if (reason) flight.stop(reason);
+        } catch (error) {
+          app.log.error({ err: error, link: id, downloadId }, 'download check failed');
+          flight.stop('check_failed');
         }
-        sentAtLastCheck = sent;
       }, IDLE_TIMEOUT);
 
       adjust(perLink, id, 1);
       adjust(perVisitor, visitor, 1);
       adjust(inFlight, `${id} ${visitor}`, 1);
-      shares.record(id, { ...visit, ...target, type: 'download_started', downloadId, bytes: plainSize });
+      const set = flights.get(id) ?? new Set<Flight>();
+      set.add(flight);
+      flights.set(id, set);
       source.on('data', (chunk: Buffer) => {
         sent += chunk.length;
       });

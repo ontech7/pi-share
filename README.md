@@ -309,7 +309,7 @@ out of logs, and out of anything you would not hand the link to.
 | `CLIENT_IP_HEADER` / `COUNTRY_HEADER`              | `cf-connecting-ip` / `cf-ipcountry` | Headers set by your tunnel                                                               |
 | `DEFAULT_EXPIRY_DAYS`                              | `7`                                 | Expiry preselected for new links until you choose one in the settings                    |
 | `MAX_PASSWORD_FAILURES`                            | `10`                                | Wrong passwords before a link locks                                                      |
-| `EVENT_RETENTION_DAYS`                             | `365`                               | Older activity is deleted                                                                |
+| `EVENT_RETENTION_DAYS`                             | `365`                               | Older activity is deleted, except who got the files of a link with a download limit      |
 | `ADMIN_LANG`                                       |                                     | `en` or `it`; empty follows the browser                                                  |
 | `PROVIDER_LOOKUP`                                  | `true`                              | Default of **Settings → Activity → Show the provider** until you change it there         |
 | `PROVIDER_DATA_URL`                                | iptoasn.com's combined table        | Where the weekly provider table (gzipped iptoasn TSV, public domain) is downloaded from  |

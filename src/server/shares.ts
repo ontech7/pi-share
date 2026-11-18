@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, not, or, type SQL, sql } from 'drizzle-orm';
 import type {
   CreateLinkBody,
   EventType,
@@ -101,6 +101,7 @@ export class Shares {
   private readonly content: ContentDeps;
   /** Bumped on every change to links, so cached views of them can tell they are stale. */
   revision = 0;
+  private readonly changeListeners = new Set<(id: string) => void>();
 
   constructor(deps: SharesDeps) {
     this.db = deps.db;
@@ -279,7 +280,7 @@ export class Shares {
       if (Object.keys(changes).length) tx.update(links).set(changes).where(eq(links.id, id)).run();
       accept?.(tx);
     });
-    this.revision++;
+    this.changed(id);
     return this.detail(id);
   }
 
@@ -331,7 +332,24 @@ export class Shares {
   remove(id: string, owner?: string) {
     this.row(id, owner);
     this.db.delete(links).where(eq(links.id, id)).run();
+    this.changed(id);
+  }
+
+  /** Told after a link is edited or deleted, so downloads in flight can check they may go on. */
+  onLinkChange(listener: (id: string) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private changed(id: string) {
     this.revision++;
+    for (const listener of this.changeListeners) {
+      try {
+        listener(id);
+      } catch (error) {
+        console.error('pi-share: link change listener failed', error);
+      }
+    }
   }
 
   activeCount(): number {
@@ -365,6 +383,24 @@ export class Shares {
     return !!proof && safeEqual(proof, keyProof(this.vault.open(link.sealedKey, link.id), link.id));
   }
 
+  /**
+   * Why a download already running must stop, or null: only what the owner or time decides (deleted, disabled,
+   * expired, limit lowered, network). Changes on disk are left to the read itself, which fails on its own file
+   * and only on it; a lock is left out too, or anyone guessing passwords could cut the people downloading.
+   */
+  revocation(id: string, { visitor, ip }: Pick<Visit, 'visitor' | 'ip'>): RefusalReason | 'not_found' | null {
+    const link = this.db.select().from(links).where(eq(links.id, id)).get();
+    if (!link) return 'not_found';
+    if (!this.allowsNetwork(link, ip)) return 'network';
+    if (!link.active) return 'disabled';
+    if (link.expiresAt && link.expiresAt <= Date.now()) return 'expired';
+    if (link.maxDownloads && !(visitor && this.isRecipient(id, visitor))) {
+      const { recipients } = this.counts(id).get(id) ?? EMPTY_COUNTS;
+      if (recipients >= link.maxDownloads) return 'exhausted';
+    }
+    return null;
+  }
+
   /** Whether the link may be opened from this address: always, unless it lists the networks it allows. */
   allowsNetwork(link: LinkRow, ip: string | null | undefined): boolean {
     return !link.allowedNetworks?.length || isAllowed(allowList(link.allowedNetworks), ip);
@@ -394,7 +430,26 @@ export class Shares {
     return { ok: true, value: { link, content, counts, key: this.vault.open(link.sealedKey, id) } };
   }
 
-  record(linkId: string, event: NewEvent) {
+  /**
+   * Saves an event; false when the link is gone, which happens to downloads and password checks still running
+   * when it is deleted. Their events would only be deleted with it.
+   */
+  record(linkId: string, event: NewEvent): boolean {
+    try {
+      this.insertEvent(linkId, event);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'SQLITE_CONSTRAINT_FOREIGNKEY') return false;
+      throw error;
+    }
+    this.onEvent?.(
+      linkId,
+      event,
+      () => this.db.select({ label: links.label }).from(links).where(eq(links.id, linkId)).get()?.label ?? null,
+    );
+    return true;
+  }
+
+  private insertEvent(linkId: string, event: NewEvent) {
     this.db
       .insert(events)
       .values({
@@ -414,11 +469,6 @@ export class Shares {
         counted: event.counted ?? false,
       })
       .run();
-    this.onEvent?.(
-      linkId,
-      event,
-      () => this.db.select({ label: links.label }).from(links).where(eq(links.id, linkId)).get()?.label ?? null,
-    );
   }
 
   private startedDownload(linkId: string, downloadId: string) {
@@ -444,9 +494,24 @@ export class Shares {
     return row !== undefined;
   }
 
+  /**
+   * Old activity goes, except the downloads that count towards a link's limit: without them a link at its limit
+   * would open again to new people. Those keep only the anonymous visitor id, not the address or the browser.
+   */
   pruneEvents(olderThanDays: number): number {
     const cutoff = Date.now() - olderThanDays * 86_400_000;
-    return this.db.delete(events).where(lt(events.at, cutoff)).run().changes;
+    const limited = this.db.select({ id: links.id }).from(links).where(isNotNull(links.maxDownloads));
+    const kept = and(eq(events.counted, true), inArray(events.linkId, limited)) as SQL;
+    return this.db.transaction((tx) => {
+      tx.update(events)
+        .set({ ip: null, country: null, userAgent: null, language: null })
+        .where(and(lt(events.at, cutoff), kept, isNotNull(events.ip)))
+        .run();
+      return tx
+        .delete(events)
+        .where(and(lt(events.at, cutoff), not(kept)))
+        .run().changes;
+    });
   }
 
   /** Whether this visitor started this download (only they may report how it ended). */

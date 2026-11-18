@@ -2,8 +2,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const created = new Set<string>();
+
+/** A fresh directory under the system temp dir, removed after the test file by `removeTempDirs` (test/setup.ts). */
 export function tempDir(prefix = 'pi-share-'): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  created.add(dir);
+  return dir;
+}
+
+export function removeTempDirs() {
+  for (const dir of created) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  created.clear();
 }
 
 export function writeFiles(root: string, files: Record<string, string | Buffer>) {

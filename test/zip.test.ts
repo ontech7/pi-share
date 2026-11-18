@@ -72,9 +72,8 @@ describe('zip', () => {
   it('rejects, without hanging, a file read with a signal that is already aborted', async () => {
     const root = tempDir();
     writeFiles(root, { 'a.txt': 'hello' });
-    const absolute = path.join(root, 'a.txt');
-    const stat = fs.statSync(absolute);
-    const fd = fs.openSync(absolute, 'r');
+    const fd = fs.openSync(path.join(root, 'a.txt'), 'r');
+    const stat = fs.fstatSync(fd);
     const abort = new AbortController();
     abort.abort();
     const read = async () => {

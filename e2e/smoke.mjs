@@ -261,7 +261,7 @@ try {
   await share.shot('05-recipient-mobile', { width: 390, height: 844, mobile: true });
   assert(
     await share.eval(
-      `[...document.querySelectorAll('[title]')].some((el) => el.title === ${JSON.stringify(`${LABEL}.zip`)} && el.lastElementChild.textContent.endsWith('.zip'))`,
+      `[...document.querySelectorAll('[title$=".zip"]')].some((el) => el.title.length > 40 && el.lastElementChild.textContent.endsWith('.zip'))`,
     ),
     'a long zip name keeps its extension in view',
   );

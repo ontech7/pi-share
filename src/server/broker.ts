@@ -88,14 +88,14 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
   /** Downloads in flight per link, so a change to the link reaches the ones already streaming. */
   const flights = new Map<string, Set<Flight>>();
 
-  /** Why a download in flight must stop now, or null while the link would still serve it. */
+  /** Why a download in flight must stop now, or null while the owner still lets it go on. */
   const revoked = (id: string, flight: Flight): string | null => {
     const link = shares.find(id);
     if (!link) return 'deleted';
     if (shares.passwordGeneration(link) !== flight.generation) return 'password_changed';
-    if (!isOnline(shares, settings)) return 'service_off';
-    const found = shares.servable(id, flight.visit);
-    return found.ok ? null : found.reason;
+    const reason = shares.revocation(id, flight.visit);
+    if (reason) return reason === 'not_found' ? 'deleted' : reason;
+    return isOnline(shares, settings) ? null : 'service_off';
   };
 
   const recheck = (id: string) => {
@@ -113,7 +113,7 @@ export function buildBroker({ shares, settings, storage, vault, secret }: Broker
 
   // Never echo internal errors (SQLite, file system) to the visitor: the edge relays error bodies as they are.
   app.setErrorHandler((error: { statusCode?: number }, request, reply) => {
-    if (error.statusCode && error.statusCode < 500) return reply.send(error);
+    if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) return reply.send(error);
     request.log.error(error);
     return reply.code(500).send({ error: 'internal' });
   });

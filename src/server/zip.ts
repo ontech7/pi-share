@@ -51,11 +51,14 @@ export function exactFile(fd: number, expected: Expected, signal?: AbortSignal):
 
 /** Exactly the linked bytes from an already opened descriptor; anything else means the file changed underneath. */
 export async function* readExactly(fd: number, expected: Expected, signal?: AbortSignal): AsyncGenerator<Buffer> {
-  if (expected.size === 0) {
+  if (expected.size === 0 || signal?.aborted) {
     fs.closeSync(fd);
+    signal?.throwIfAborted();
     return;
   }
   const file = reader(fd, expected.size, signal);
+  // The error reaches the loop below; without a listener of its own, one emitted outside it would be uncaught.
+  file.on('error', () => {});
   const closed = new Promise<void>((resolve) => file.once('close', () => resolve()));
   try {
     let read = 0;
@@ -138,6 +141,8 @@ export function zipStream(entries: ZipEntry[], signal?: AbortSignal): Readable {
 
       let crc = 0;
       let written = 0;
+      // A download stopped between two files must not open the next one.
+      signal?.throwIfAborted();
       for await (const chunk of readExactly(entry.open(), entry, signal)) {
         crc = zlib.crc32(chunk, crc);
         written += chunk.length;

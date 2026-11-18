@@ -105,6 +105,28 @@ describe('a link changed while someone downloads from it', () => {
   });
 });
 
+describe('changes on disk while someone downloads', () => {
+  it('leave a download of an untouched file running when something else in the folder changes', async () => {
+    fs.mkdirSync(path.join(stack.storageRoot, 'Drift'));
+    fs.writeFileSync(path.join(stack.storageRoot, 'Drift/big.bin'), Buffer.alloc(BIG, 3));
+    const link = await create({ paths: ['Drift'], onChange: 'pause' });
+    const visitor = await stack.visit(link.id, '198.51.100.78');
+    const { ticket } = (await stack.open(visitor, link)).json() as { ticket: string };
+    const download = await stack.rawDownload(visitor, link.id, entryId(0, 'big.bin'), ticket);
+    expect(download.statusCode).toBe(200);
+
+    const { failed } = await interrupt(download.body, async () => {
+      fs.writeFileSync(path.join(stack.storageRoot, 'Drift/new.txt'), 'added');
+      expect((await stack.adminCall('PATCH', `/api/links/${link.id}`, { label: 'Renamed' })).status).toBe(200);
+    });
+    expect(failed).toBe(false);
+    await waitFor(
+      async () => (await detail(link.id)).events.some((event) => event.type === 'download_finished'),
+      'finish',
+    );
+  });
+});
+
 describe('a file rewritten while it is being read', () => {
   it('fails the download instead of passing half old and half new bytes as the file', async () => {
     const file = bigFile('rewritten.bin');
@@ -177,6 +199,8 @@ describe('pruning old activity', () => {
     const kept = await detail(limited.id);
     expect(kept.state).toBe('exhausted');
     expect(kept.events.map((event) => event.type)).toEqual(['download_finished']);
+    expect(kept.events[0]).toMatchObject({ ip: null, userAgent: null, country: null, language: null });
+    expect(kept.events[0]?.visitor).toBeTruthy();
     expect((await detail(free.id)).events).toEqual([]);
   });
 });

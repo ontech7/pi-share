@@ -335,7 +335,7 @@ export class Shares {
     this.changed(id);
   }
 
-  /** Told after a link is edited, locked or deleted, so downloads in flight can check they may go on. */
+  /** Told after a link is edited or deleted, so downloads in flight can check they may go on. */
   onLinkChange(listener: (id: string) => void): () => void {
     this.changeListeners.add(listener);
     return () => this.changeListeners.delete(listener);
@@ -381,6 +381,24 @@ export class Shares {
   /** True when the caller derived the proof from the link key, i.e. holds the whole link and not only its id. */
   holdsKey(link: LinkRow, proof: string | undefined): boolean {
     return !!proof && safeEqual(proof, keyProof(this.vault.open(link.sealedKey, link.id), link.id));
+  }
+
+  /**
+   * Why a download already running must stop, or null: only what the owner or time decides (deleted, disabled,
+   * expired, limit lowered, network). Changes on disk are left to the read itself, which fails on its own file
+   * and only on it; a lock is left out too, or anyone guessing passwords could cut the people downloading.
+   */
+  revocation(id: string, { visitor, ip }: Pick<Visit, 'visitor' | 'ip'>): RefusalReason | 'not_found' | null {
+    const link = this.db.select().from(links).where(eq(links.id, id)).get();
+    if (!link) return 'not_found';
+    if (!this.allowsNetwork(link, ip)) return 'network';
+    if (!link.active) return 'disabled';
+    if (link.expiresAt && link.expiresAt <= Date.now()) return 'expired';
+    if (link.maxDownloads && !(visitor && this.isRecipient(id, visitor))) {
+      const { recipients } = this.counts(id).get(id) ?? EMPTY_COUNTS;
+      if (recipients >= link.maxDownloads) return 'exhausted';
+    }
+    return null;
   }
 
   /** Whether the link may be opened from this address: always, unless it lists the networks it allows. */
@@ -477,16 +495,23 @@ export class Shares {
   }
 
   /**
-   * Old activity goes, except the downloads that count towards a link's limit: those are who already got the
-   * files, and without them a link at its limit would open again to new people.
+   * Old activity goes, except the downloads that count towards a link's limit: without them a link at its limit
+   * would open again to new people. Those keep only the anonymous visitor id, not the address or the browser.
    */
   pruneEvents(olderThanDays: number): number {
     const cutoff = Date.now() - olderThanDays * 86_400_000;
     const limited = this.db.select({ id: links.id }).from(links).where(isNotNull(links.maxDownloads));
-    return this.db
-      .delete(events)
-      .where(and(lt(events.at, cutoff), not(and(eq(events.counted, true), inArray(events.linkId, limited)) as SQL)))
-      .run().changes;
+    const kept = and(eq(events.counted, true), inArray(events.linkId, limited)) as SQL;
+    return this.db.transaction((tx) => {
+      tx.update(events)
+        .set({ ip: null, country: null, userAgent: null, language: null })
+        .where(and(lt(events.at, cutoff), kept, isNotNull(events.ip)))
+        .run();
+      return tx
+        .delete(events)
+        .where(and(lt(events.at, cutoff), not(kept)))
+        .run().changes;
+    });
   }
 
   /** Whether this visitor started this download (only they may report how it ended). */
@@ -515,7 +540,7 @@ export class Shares {
     if (lock) {
       this.db.update(links).set({ lockedAt: Date.now() }).where(eq(links.id, link.id)).run();
       this.record(link.id, { ...visit, type: 'locked', detail: `${failures} wrong passwords` });
-      this.changed(link.id);
+      this.revision++;
     }
     return lock;
   }

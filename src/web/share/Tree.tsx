@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { ShareMeta } from '../../shared/api.ts';
 import { formatBytes } from '../lib/format.ts';
 import { useI18n } from '../lib/i18n-context.tsx';
+import { FileName } from '../ui/FileName.tsx';
 import type { DownloadState } from './downloads.ts';
 import { FileRow } from './FileRow.tsx';
 
@@ -144,9 +145,7 @@ function FolderRow(props: ContentProps) {
           <Folder className="size-5" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-medium" title={node.name}>
-            {node.name}
-          </span>
+          <FileName name={node.name} className="text-[15px] font-medium" />
           <span className="block text-xs text-muted tabular">
             {t('share.files', { n: node.count })} · {formatBytes(node.size, lang)}
           </span>

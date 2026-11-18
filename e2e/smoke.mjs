@@ -33,6 +33,8 @@ fs.writeFileSync(path.join(storage, 'Work/notes.txt'), 'notes');
 fs.writeFileSync(path.join(storage, 'Media/video.bin'), crypto.randomBytes(40 * 1024 * 1024 + 123));
 fs.writeFileSync(path.join(storage, 'Private/secret.txt'), 'secret');
 
+const LABEL = 'Smoke test with a label far too long for one line on a phone';
+
 const env = {
   ...process.env,
   STORAGE_ROOT: storage,
@@ -230,7 +232,8 @@ try {
   await panel.click('video.bin');
   await panel.shot('03-picker');
   await panel.click('Continue');
-  await panel.fill('dialog input', 0, 'Smoke test');
+  // long enough to be cut on a phone, so the shots show the zip keeping its extension
+  await panel.fill('dialog input', 0, LABEL);
   await panel.click('Generate');
   const password = await panel.eval(`document.querySelectorAll('dialog input')[1].value`);
   await panel.click('Create link');
@@ -256,6 +259,12 @@ try {
   await share.text('Files shared with you', 20_000);
   await share.shot('05-recipient');
   await share.shot('05-recipient-mobile', { width: 390, height: 844, mobile: true });
+  assert(
+    await share.eval(
+      `[...document.querySelectorAll('[title]')].some((el) => el.title === ${JSON.stringify(`${LABEL}.zip`)} && el.lastElementChild.textContent.endsWith('.zip'))`,
+    ),
+    'a long zip name keeps its extension in view',
+  );
   await until(() => share.eval(`!!navigator.serviceWorker.controller`), 'service worker control');
   assert(true, 'service worker controls the page');
 
@@ -275,7 +284,7 @@ try {
     'zip verified',
     60_000,
   );
-  await until(() => fs.existsSync(path.join(downloads, 'Smoke test.zip')), 'zip on disk');
+  await until(() => fs.existsSync(path.join(downloads, `${LABEL}.zip`)), 'zip on disk');
   await share.shot('06-verified');
   assert(share.errors.length === 0, `recipient page without errors ${share.errors.join(' | ')}`);
 

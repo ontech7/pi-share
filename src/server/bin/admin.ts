@@ -52,10 +52,31 @@ const updates = new Updates({
   requestDir: config.updateRequestDir,
   statusDir: config.updateStatusDir,
 });
-setTimeout(() => updates.maybeCheck(), 10_000).unref();
-setInterval(() => updates.maybeCheck(), 60 * 60 * 1000).unref();
-setTimeout(() => void providers.start(), 15_000).unref();
-setInterval(() => void providers.maybeRefresh(), 6 * 60 * 60 * 1000).unref();
+/** Background work logs its failures: thrown from a timer, they would end the process and every download with it. */
+const guarded = (label: string, task: () => unknown) => () => {
+  try {
+    Promise.resolve(task()).catch((error) => console.error(`pi-share: ${label} failed`, error));
+  } catch (error) {
+    console.error(`pi-share: ${label} failed`, error);
+  }
+};
+
+setTimeout(
+  guarded('update check', () => updates.maybeCheck()),
+  10_000,
+).unref();
+setInterval(
+  guarded('update check', () => updates.maybeCheck()),
+  60 * 60 * 1000,
+).unref();
+setTimeout(
+  guarded('provider table', () => providers.start()),
+  15_000,
+).unref();
+setInterval(
+  guarded('provider table', () => providers.maybeRefresh()),
+  6 * 60 * 60 * 1000,
+).unref();
 
 const setupCode = settings.hasAdminPassword() ? null : generateSetupCode();
 if (setupCode) console.log(`pi-share: no admin password yet, open the admin and use the setup code ${setupCode}`);
@@ -74,7 +95,7 @@ const admin = await buildAdmin({
 });
 const broker = buildBroker({ shares, settings, storage, vault, secret: readSecret(config.brokerSecretFile) });
 
-const prune = () => shares.pruneEvents(config.eventRetentionDays);
+const prune = guarded('pruning old activity', () => shares.pruneEvents(config.eventRetentionDays));
 prune();
 setInterval(prune, 24 * 60 * 60 * 1000).unref();
 

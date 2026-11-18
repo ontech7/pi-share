@@ -4,9 +4,33 @@ import zlib from 'node:zlib';
 
 export type ZipEntry = { name: string; size: number; modifiedAt: number; open: () => number };
 
-/** A stream that owns the descriptor from the start (closed even if never read) and fails if the file shrank. */
-export function exactFile(fd: number, size: number, signal?: AbortSignal): Readable {
-  if (size === 0) {
+export type Expected = { size: number; modifiedAt: number };
+
+/**
+ * Fails when the file is not what was linked once read to the end: shorter, or written to while being read. The
+ * size and time are checked on the open descriptor before it closes, so a same-size rewrite in place cannot
+ * pass for the original with half of each.
+ */
+function changedReason(fd: number, read: number, expected: Expected): string | null {
+  if (read !== expected.size) return 'file shrank while being read';
+  const now = fs.fstatSync(fd);
+  if (now.size !== expected.size || Math.trunc(now.mtimeMs) !== Math.trunc(expected.modifiedAt)) {
+    return 'file changed while being read';
+  }
+  return null;
+}
+
+/**
+ * A read stream that keeps the descriptor open at its end, for the final check; destroying it closes the
+ * descriptor, after any read still in flight, so it is never closed twice nor under a pending read.
+ */
+function reader(fd: number, size: number, signal?: AbortSignal) {
+  return fs.createReadStream('', { fd, start: 0, end: size - 1, autoClose: false, signal });
+}
+
+/** A stream of exactly the linked bytes from an already opened descriptor, which it closes however it ends. */
+export function exactFile(fd: number, expected: Expected, signal?: AbortSignal): Readable {
+  if (expected.size === 0) {
     fs.closeSync(fd);
     return Readable.from([]);
   }
@@ -17,24 +41,34 @@ export function exactFile(fd: number, size: number, signal?: AbortSignal): Reada
       done(null, chunk);
     },
     flush(done) {
-      done(read === size ? null : new Error('file shrank while being read'));
+      const reason = changedReason(fd, read, expected);
+      done(reason ? new Error(reason) : null);
     },
   });
-  return pipeline(fs.createReadStream('', { fd, start: 0, end: size - 1, autoClose: true, signal }), guard, () => {});
+  const file = reader(fd, expected.size, signal);
+  return pipeline(file, guard, () => file.destroy());
 }
 
-/** Exactly `size` bytes from an already opened descriptor; fewer means the file changed underneath. */
-export async function* readExactly(fd: number, size: number, signal?: AbortSignal): AsyncGenerator<Buffer> {
-  if (size === 0) {
+/** Exactly the linked bytes from an already opened descriptor; anything else means the file changed underneath. */
+export async function* readExactly(fd: number, expected: Expected, signal?: AbortSignal): AsyncGenerator<Buffer> {
+  if (expected.size === 0) {
     fs.closeSync(fd);
     return;
   }
-  let read = 0;
-  for await (const chunk of fs.createReadStream('', { fd, start: 0, end: size - 1, autoClose: true, signal })) {
-    read += (chunk as Buffer).length;
-    yield chunk as Buffer;
+  const file = reader(fd, expected.size, signal);
+  const closed = new Promise<void>((resolve) => file.once('close', () => resolve()));
+  try {
+    let read = 0;
+    for await (const chunk of file) {
+      read += (chunk as Buffer).length;
+      yield chunk as Buffer;
+    }
+    const reason = changedReason(fd, read, expected);
+    if (reason) throw new Error(reason);
+  } finally {
+    file.destroy();
+    await closed;
   }
-  if (read !== size) throw new Error('file shrank while being read');
 }
 
 function dosDateTime(ms: number): { time: number; date: number } {
@@ -104,7 +138,7 @@ export function zipStream(entries: ZipEntry[], signal?: AbortSignal): Readable {
 
       let crc = 0;
       let written = 0;
-      for await (const chunk of readExactly(entry.open(), entry.size, signal)) {
+      for await (const chunk of readExactly(entry.open(), entry, signal)) {
         crc = zlib.crc32(chunk, crc);
         written += chunk.length;
         yield chunk;

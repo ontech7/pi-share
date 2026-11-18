@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, not, or, type SQL, sql } from 'drizzle-orm';
 import type {
   CreateLinkBody,
   EventType,
@@ -101,6 +101,7 @@ export class Shares {
   private readonly content: ContentDeps;
   /** Bumped on every change to links, so cached views of them can tell they are stale. */
   revision = 0;
+  private readonly changeListeners = new Set<(id: string) => void>();
 
   constructor(deps: SharesDeps) {
     this.db = deps.db;
@@ -279,7 +280,7 @@ export class Shares {
       if (Object.keys(changes).length) tx.update(links).set(changes).where(eq(links.id, id)).run();
       accept?.(tx);
     });
-    this.revision++;
+    this.changed(id);
     return this.detail(id);
   }
 
@@ -331,7 +332,24 @@ export class Shares {
   remove(id: string, owner?: string) {
     this.row(id, owner);
     this.db.delete(links).where(eq(links.id, id)).run();
+    this.changed(id);
+  }
+
+  /** Told after a link is edited, locked or deleted, so downloads in flight can check they may go on. */
+  onLinkChange(listener: (id: string) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private changed(id: string) {
     this.revision++;
+    for (const listener of this.changeListeners) {
+      try {
+        listener(id);
+      } catch (error) {
+        console.error('pi-share: link change listener failed', error);
+      }
+    }
   }
 
   activeCount(): number {
@@ -394,7 +412,26 @@ export class Shares {
     return { ok: true, value: { link, content, counts, key: this.vault.open(link.sealedKey, id) } };
   }
 
-  record(linkId: string, event: NewEvent) {
+  /**
+   * Saves an event; false when the link is gone, which happens to downloads and password checks still running
+   * when it is deleted. Their events would only be deleted with it.
+   */
+  record(linkId: string, event: NewEvent): boolean {
+    try {
+      this.insertEvent(linkId, event);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'SQLITE_CONSTRAINT_FOREIGNKEY') return false;
+      throw error;
+    }
+    this.onEvent?.(
+      linkId,
+      event,
+      () => this.db.select({ label: links.label }).from(links).where(eq(links.id, linkId)).get()?.label ?? null,
+    );
+    return true;
+  }
+
+  private insertEvent(linkId: string, event: NewEvent) {
     this.db
       .insert(events)
       .values({
@@ -414,11 +451,6 @@ export class Shares {
         counted: event.counted ?? false,
       })
       .run();
-    this.onEvent?.(
-      linkId,
-      event,
-      () => this.db.select({ label: links.label }).from(links).where(eq(links.id, linkId)).get()?.label ?? null,
-    );
   }
 
   private startedDownload(linkId: string, downloadId: string) {
@@ -444,9 +476,17 @@ export class Shares {
     return row !== undefined;
   }
 
+  /**
+   * Old activity goes, except the downloads that count towards a link's limit: those are who already got the
+   * files, and without them a link at its limit would open again to new people.
+   */
   pruneEvents(olderThanDays: number): number {
     const cutoff = Date.now() - olderThanDays * 86_400_000;
-    return this.db.delete(events).where(lt(events.at, cutoff)).run().changes;
+    const limited = this.db.select({ id: links.id }).from(links).where(isNotNull(links.maxDownloads));
+    return this.db
+      .delete(events)
+      .where(and(lt(events.at, cutoff), not(and(eq(events.counted, true), inArray(events.linkId, limited)) as SQL)))
+      .run().changes;
   }
 
   /** Whether this visitor started this download (only they may report how it ended). */
@@ -475,7 +515,7 @@ export class Shares {
     if (lock) {
       this.db.update(links).set({ lockedAt: Date.now() }).where(eq(links.id, link.id)).run();
       this.record(link.id, { ...visit, type: 'locked', detail: `${failures} wrong passwords` });
-      this.revision++;
+      this.changed(link.id);
     }
     return lock;
   }

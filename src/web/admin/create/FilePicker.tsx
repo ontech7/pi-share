@@ -4,6 +4,7 @@ import { Check, ChevronRight, File, Folder, HardDrive } from 'lucide-react';
 import type { BrowseEntry } from '../../../shared/api.ts';
 import { formatBytes, formatDate } from '../../lib/format.ts';
 import { useI18n } from '../../lib/i18n-context.tsx';
+import { FileName } from '../../ui/FileName.tsx';
 import { Spinner } from '../../ui/Spinner.tsx';
 import { ApiError, api, keys } from '../api.ts';
 
@@ -109,7 +110,7 @@ export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
                       className="flex w-full items-center gap-3 px-4 py-3 text-left"
                     >
                       {box}
-                      <span className="min-w-0 flex-1 truncate text-[15px]">{entry.name}</span>
+                      <FileName name={entry.name} className="flex-1 text-[15px]" />
                       {meta}
                     </button>
                   </li>
@@ -134,7 +135,7 @@ export function FilePicker({ path, onNavigate, selected, onToggle }: Props) {
                     className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-4 pl-1 text-left"
                   >
                     <Folder className="size-5 shrink-0 text-accent-strong" />
-                    <span className="min-w-0 flex-1 truncate text-[15px]">{entry.name}</span>
+                    <FileName name={entry.name} className="flex-1 text-[15px]" />
                     {meta}
                   </button>
                 </li>

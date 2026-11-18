@@ -22,6 +22,7 @@ import { previewApp } from '../../lib/ua.ts';
 import { Button } from '../../ui/Button.tsx';
 import { Card } from '../../ui/Card.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
+import { FileName } from '../../ui/FileName.tsx';
 import { Spinner } from '../../ui/Spinner.tsx';
 import { Switch } from '../../ui/Switch.tsx';
 import { useToast } from '../../ui/Toaster.tsx';
@@ -221,7 +222,7 @@ export function LinkScreen({ id }: { id: string }) {
                 <FileText className="size-5 shrink-0 text-muted" />
               )}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[15px] font-medium">{item.name}</p>
+                <FileName name={item.name} className="text-[15px] font-medium" />
                 <p className="truncate font-mono text-xs text-muted">{item.path}</p>
               </div>
               <span className="hidden shrink-0 text-right text-sm text-muted tabular sm:block">

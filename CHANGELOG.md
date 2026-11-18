@@ -5,6 +5,27 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-18
+
+### Fixed
+
+- Deleting a link while someone was downloading from it no longer restarts the service, which cut every download
+  in flight.
+- Downloads already running stop when their link is deleted, disabled, expired, given a new password or a lower
+  limit, when the visitor's network is no longer allowed or when the service is switched off. Until now they went
+  on to the end.
+- A file rewritten while it is being downloaded makes the download fail, instead of delivering a mix of the old
+  and the new content.
+- A HEAD request on a file no longer reads it whole and counts it as a download.
+- Links with a download limit no longer open again to new people when their old activity is deleted; what is kept
+  for the limit loses the address and the browser after the retention period.
+- Long file and folder names are cut in the middle, so their end and the extension stay readable (the generated
+  zip included); the full name is in the tooltip.
+
+### Security
+
+- Internal errors reach visitors as a generic message, without details from the database or the disk.
+
 ## [0.5.1] - 2026-10-24
 
 ### Added
@@ -99,7 +120,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Password, expiry, download limit and activity log per link.
 - Service switch; admin on the LAN, network-less edge behind a tunnel.
 
-[Unreleased]: https://github.com/ontech7/pi-share/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ontech7/pi-share/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/ontech7/pi-share/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/ontech7/pi-share/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ontech7/pi-share/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ontech7/pi-share/compare/v0.4.1...v0.4.2

@@ -13,6 +13,7 @@ import {
 import { formatBytes } from '../lib/format.ts';
 import { useI18n } from '../lib/i18n-context.tsx';
 import { Button } from '../ui/Button.tsx';
+import { FileName } from '../ui/FileName.tsx';
 import { Progress } from '../ui/Progress.tsx';
 import { Spinner } from '../ui/Spinner.tsx';
 import type { DownloadState } from './downloads.ts';
@@ -61,9 +62,7 @@ export function FileRow({ name, size, available, state, onDownload, highlight }:
           <Icon className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-medium" title={name}>
-            {name}
-          </p>
+          <FileName name={name} className="text-[15px] font-medium" />
           <p className="text-xs text-muted tabular">
             {available ? formatBytes(size, lang) : t('share.fileUnavailable')}
             {state.status === 'running' && ` · ${Math.floor(progress * 100)}%`}

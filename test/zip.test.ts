@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { archiveNames, zipSize, zipStream } from '../src/server/zip.ts';
+import { archiveNames, readExactly, zipSize, zipStream } from '../src/server/zip.ts';
 import { tempDir, writeFiles } from './helpers.ts';
 
 describe('zip', () => {
@@ -40,6 +40,50 @@ describe('zip', () => {
       `è big.bin|200000|${crypto.createHash('sha256').update(big).digest('hex')}`,
     ]);
     expect(execFileSync('unzip', ['-t', file]).toString()).toContain('No errors detected');
+  });
+
+  it('stops cleanly when aborted between two files, without opening the next one', async () => {
+    const root = tempDir();
+    writeFiles(root, { 'a.txt': 'hello', 'b.txt': 'world' });
+    const opened: string[] = [];
+    const abort = new AbortController();
+    const entries = ['a.txt', 'b.txt'].map((name) => {
+      const absolute = path.join(root, name);
+      const stat = fs.statSync(absolute);
+      return {
+        name,
+        size: stat.size,
+        modifiedAt: stat.mtimeMs,
+        open: () => {
+          opened.push(name);
+          return fs.openSync(absolute, 'r');
+        },
+      };
+    });
+    const read = async () => {
+      for await (const chunk of zipStream(entries, abort.signal)) {
+        if ((chunk as Buffer).toString() === 'hello') abort.abort();
+      }
+    };
+    await expect(read()).rejects.toThrow(/abort/i);
+    expect(opened).toEqual(['a.txt']);
+  });
+
+  it('rejects, without hanging, a file read with a signal that is already aborted', async () => {
+    const root = tempDir();
+    writeFiles(root, { 'a.txt': 'hello' });
+    const absolute = path.join(root, 'a.txt');
+    const stat = fs.statSync(absolute);
+    const fd = fs.openSync(absolute, 'r');
+    const abort = new AbortController();
+    abort.abort();
+    const read = async () => {
+      for await (const _chunk of readExactly(fd, { size: stat.size, modifiedAt: stat.mtimeMs }, abort.signal)) {
+        // never reached
+      }
+    };
+    await expect(read()).rejects.toThrow(/abort/i);
+    expect(() => fs.fstatSync(fd)).toThrow();
   });
 
   it('renames duplicates inside the archive', () => {

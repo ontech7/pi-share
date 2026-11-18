@@ -242,7 +242,8 @@ export async function buildEdge({ config, brokerSecret, staticRoot, onlineCacheM
     },
   );
 
-  app.get('/api/links/:id/files/:part', async (request, reply) => {
+  // No HEAD: it would make the broker stream (and count) the whole download for nothing.
+  app.get('/api/links/:id/files/:part', { exposeHeadRoute: false }, async (request, reply) => {
     const { id, part } = request.params as { id: string; part: string };
     if (!linkId.safeParse(id).success || !/^(all|[0-9a-f]{16})$/.test(part)) return reply.code(404).send();
     const visit = visitOf(request);

@@ -11,6 +11,7 @@ import { Button } from '../../ui/Button.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
 import { Dialog } from '../../ui/Dialog.tsx';
 import { Field } from '../../ui/Field.tsx';
+import { FileName } from '../../ui/FileName.tsx';
 import { ApiError, api, keys } from '../api.ts';
 import { FilePicker } from './FilePicker.tsx';
 import { NetworksField, networksProblem, splitNetworks } from './NetworksField.tsx';
@@ -197,7 +198,7 @@ export function CreateLinkDialog({ open, onClose }: { open: boolean; onClose: ()
                       className="press flex max-w-64 items-center gap-1.5 rounded-full bg-surface-2 py-1 pr-2 pl-3 text-sm hover:bg-line"
                     >
                       {entry.type === 'dir' && <Folder className="size-3.5 shrink-0 text-accent-strong" />}
-                      <span className="truncate">{entry.name}</span>
+                      <FileName name={entry.name} title={null} />
                       <X className="size-3.5 shrink-0 text-muted" />
                     </button>
                   </li>
